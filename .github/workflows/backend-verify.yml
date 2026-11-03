@@ -1,0 +1,30 @@
+name: Backend Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Daily drift check on the provider + control plane.
+    - cron: "0 6 * * *"
+
+jobs:
+  verify:
+    name: Provider API + Supabase contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The public, embeddable client configuration is committed in .env by design
+      # (anon key / app key are public values). No secrets are needed here.
+      - name: Verify provider API contract
+        run: node scripts/verify-provider.mjs
+
+      - name: Verify Supabase control plane
+        run: node scripts/verify-backend.mjs

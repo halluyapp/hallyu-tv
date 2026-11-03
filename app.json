@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Emberplay (Dev)",
+    "slug": "emberplay",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "scheme": "rork-tmm1xojnlt3p8gfm6c1xf",
+    "backgroundColor": "#080A0D",
+    "splash": {
+      "backgroundColor": "#080A0D",
+      "resizeMode": "contain"
+    },
+    "android": {
+      "package": "app.emberplay.dev",
+      "versionCode": 1,
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#080A0D"
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+      ]
+    },
+    "androidStatusBar": {
+      "translucent": true,
+      "backgroundColor": "#080A0D00"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "plugins": [
+      "expo-video"
+    ]
+  }
+}
