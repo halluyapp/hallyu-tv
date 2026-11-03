@@ -41,4 +41,8 @@ export interface DownloadJob extends DownloadRequest {
   engine: DownloadEngine;
   /** Native engine only: absolute file path reported by the system on success. */
   nativeKey?: string;
+  /** Fresh-source retries already attempted (persisted so the proxy fallback survives restarts). */
+  freshRetries?: number;
+  /** True when the current source URL points at the media proxy instead of the CDN. */
+  viaProxy?: boolean;
 }

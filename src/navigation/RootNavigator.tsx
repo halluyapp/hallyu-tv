@@ -8,6 +8,7 @@ import { PlayerScreen } from "@/screens/player/PlayerScreen";
 import { DevicesScreen } from "@/screens/devices/DevicesScreen";
 import { TvPairScreen } from "@/screens/tv/TvPairScreen";
 import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
+import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
 import { WelcomeScreen } from "@/screens/auth/WelcomeScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
@@ -36,6 +37,7 @@ export type RootStackParamList = {
   Devices: undefined;
   TvPairing: undefined;
   TvHome: undefined;
+  TvSearch: undefined;
 };
 
 export type TabParamList = {
@@ -96,6 +98,7 @@ export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
         <Stack.Screen name="TvPairing" component={TvPairScreen} />
         <Stack.Screen name="TvHome" component={TvHomeScreen} />
+        <Stack.Screen name="TvSearch" component={TvSearchScreen} />
         <Stack.Screen name="Details" component={DetailsScreen} />
         <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "all" }} />
       </Stack.Navigator>

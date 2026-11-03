@@ -1,54 +1,29 @@
-import { Button } from "@/components/ui/Button";
-import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { palette, spacing } from "@/design-system/tokens";
+import { Platform } from "react-native";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchCaptions, resolveStreams } from "@/services/provider/adapter";
 import { classifyPlayerError, playerErrorMessage, PlayerErrorKind } from "@/services/player/classify";
+import { PlayerControls } from "./PlayerControls";
+import { PickerSheet, QualityOptions, SubtitleOptions } from "./PickerSheets";
 import { qualityOptions, selectableSources, selectSource } from "@/services/provider/streams";
-import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
+import { transportChain, TransportUri, StreamContext } from "@/services/provider/transport";
 import { parseSrt, cueAt, Cue } from "@/services/subtitles/srt";
 import { useLibrary } from "@/state/LibraryContext";
 import { CaptionTrack, StreamSource } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import Slider from "@react-native-community/slider";
 import { useEvent } from "expo";
 import { useKeepAwake } from "expo-keep-awake";
 import { useVideoPlayer, VideoView } from "expo-video";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Animated,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  Easing,
-  useWindowDimensions,
-} from "react-native";
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
-import {
-  ChevronLeft,
-  Pause,
-  Play,
-  RotateCcw,
-  RotateCw,
-  Subtitles,
-  Gauge,
-} from "lucide-react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-function fmt(t: number): string {
-  if (!Number.isFinite(t) || t < 0) t = 0;
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const s = Math.floor(t % 60);
-  return (h > 0 ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(s).padStart(2, "0")}`;
-}
-
 /** Bounded automatic recovery: never an endless retry loop. */
-const MAX_RECOVERY_ATTEMPTS = 3;
+const MAX_RECOVERY_ATTEMPTS = 4;
 /** A load that produces no frame for this long is a buffering timeout, not an endless spinner. */
 const BUFFER_STALL_TIMEOUT_MS = 30_000;
 
@@ -58,13 +33,19 @@ export function PlayerScreen() {
   const { subjectId, detailPath, title, mediaType, season, episode, sources, resumeAt } = route.params;
   const { saveProgress, progress } = useLibrary();
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const isTV = Platform.isTV;
 
   useKeepAwake();
+
+  const ctx: StreamContext = useMemo(
+    () => ({ subjectId, detailPath, season, episode }),
+    [subjectId, detailPath, season, episode],
+  );
 
   // Verified full-length sources only; previews are never listed or picked.
   const qualityList = useMemo(() => qualityOptions(sources), [sources]);
   const [source, setSource] = useState<StreamSource | null>(() => selectSource(sources, null));
+  const [transport, setTransport] = useState<TransportUri | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [status, setStatus] = useState<"loading" | "playing" | "error">("loading");
   const [failMessage, setFailMessage] = useState<string | null>(null);
@@ -77,6 +58,7 @@ export function PlayerScreen() {
   const [currentCue, setCurrentCue] = useState<Cue | null>(null);
   const [position, setPosition] = useState(resumeAt);
   const [duration, setDuration] = useState(0);
+  const [bufferedPosition, setBufferedPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [buffering, setBuffering] = useState(true);
 
@@ -87,7 +69,7 @@ export function PlayerScreen() {
   const requestSeqRef = useRef(0);
   const sourceRef = useRef<StreamSource | null>(source);
   sourceRef.current = source;
-  const recoveryRef = useRef({ attempts: 0, triedUrls: new Set<string>(), running: false });
+  const recoveryRef = useRef({ attempts: 0, triedUris: new Set<string>(), running: false });
 
   // Restore remote progress when the player mounts (cross-device resume).
   const remoteResume = useMemo(() => {
@@ -102,8 +84,14 @@ export function PlayerScreen() {
 
   const startAt = Math.max(resumeAt, remoteResume ?? 0, 0);
 
+  const initialTransport = useMemo(
+    () => (source ? transportChain(source, ctx)[0] : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   const player = useVideoPlayer(
-    source ? { uri: source.url, headers: PROVIDER_MEDIA_HEADERS } : null,
+    initialTransport ? { uri: initialTransport.uri, headers: initialTransport.headers } : null,
     (p) => {
       p.currentTime = startAt;
       p.play();
@@ -112,23 +100,30 @@ export function PlayerScreen() {
 
   const playing = useEvent(player, "playingChange", { isPlaying: false });
   const statusChange = useEvent(player, "statusChange", { status: "loading" as const, error: undefined });
-  const timeUpdate = useEvent(player, "timeUpdate", { currentTime: startAt, currentLiveTimestamp: null, currentOffsetFromLive: 0, bufferedPosition: 0 });
+  const timeUpdate = useEvent(player, "timeUpdate", {
+    currentTime: startAt,
+    currentLiveTimestamp: null,
+    currentOffsetFromLive: 0,
+    bufferedPosition: 0,
+  });
 
   useEffect(() => {
     setIsPlaying(playing.isPlaying);
+    if (playing.isPlaying) setBuffering(false);
   }, [playing]);
 
-  /** Swap in a new source while preserving the playback position. */
-  const applySource = useCallback(
-    (next: StreamSource, at: number, isRetry: boolean) => {
-      if (isRetry) requestSeqRef.current += 1;
+  /** Swap in a new transport while preserving the playback position. */
+  const applyTransport = useCallback(
+    (nextSource: StreamSource, nextTransport: TransportUri, at: number) => {
+      requestSeqRef.current += 1;
       const seq = requestSeqRef.current;
-      setSource(next);
+      setSource(nextSource);
+      setTransport(nextTransport);
       setStatus("loading");
       setBuffering(true);
       setTimeout(() => {
         if (seq !== requestSeqRef.current) return; // a newer selection superseded this one
-        player.replace({ uri: next.url, headers: PROVIDER_MEDIA_HEADERS });
+        player.replace({ uri: nextTransport.uri, headers: nextTransport.headers });
         player.currentTime = at;
         player.play();
       }, 0);
@@ -142,35 +137,65 @@ export function PlayerScreen() {
   }, []);
 
   /**
-   * Bounded recovery on real failures: fresh resolve → same quality with a new
-   * signed URL → next verified full-length source. Position is preserved
-   * across every switch.
+   * Bounded recovery across both transports: proxy of the current source →
+   * fresh signed URL at the same quality → other verified qualities. The CDN
+   * throttles datacenter networks, so a refused direct stream falls over to
+   * the server-side proxy transparently. Position is preserved throughout.
    */
   const recover = useCallback(
     async (kind: PlayerErrorKind, detail: string | null) => {
       const state = recoveryRef.current;
       if (state.running) return;
-      if (state.attempts >= MAX_RECOVERY_ATTEMPTS || !sourceRef.current) {
+      const current = sourceRef.current;
+      const currentTransport = transport;
+      if (state.attempts >= MAX_RECOVERY_ATTEMPTS || !current) {
         showError(kind, detail);
         return;
       }
       state.running = true;
       state.attempts += 1;
       const at = player.currentTime;
+      const chain = transportChain(current, ctx);
+      const currentUri = currentTransport?.uri ?? chain[0]?.uri ?? current.url;
+      state.triedUris.add(currentUri);
+
+      const viaProxy = chain[1];
       try {
+        // 1. Same source through the proxy (skipped if that is what just failed).
+        if (viaProxy && currentTransport?.label !== "proxy" && !state.triedUris.has(viaProxy.uri)) {
+          state.triedUris.add(viaProxy.uri);
+          state.running = false;
+          applyTransport(current, viaProxy, at);
+          return;
+        }
+
+        // 2/3. Fresh resolve — same quality first, then the default rule.
         const seq = ++requestSeqRef.current;
-        state.triedUrls.add(sourceRef.current.url);
         const res = await resolveStreams(subjectId, detailPath, season, episode);
         if (seq !== requestSeqRef.current) return; // user acted meanwhile
-        const candidates = selectableSources(res.sources).filter((s) => !state.triedUrls.has(s.url));
-        const sameQuality = candidates.find((s) => s.resolution === sourceRef.current?.resolution);
-        const next = sameQuality ?? candidates[0] ?? null;
-        if (!next) {
+
+        const candidates = selectableSources(res.sources).filter((s) => s.url !== current.url);
+        const ordered = [
+          ...candidates.filter((s) => s.resolution === current.resolution),
+          ...candidates.filter((s) => s.resolution !== current.resolution),
+        ];
+        let picked: { source: StreamSource; transport: TransportUri } | null = null;
+        for (const c of ordered) {
+          if (picked) break;
+          for (const t of transportChain(c, ctx)) {
+            if (!state.triedUris.has(t.uri)) {
+              state.triedUris.add(t.uri);
+              picked = { source: c, transport: t };
+              break;
+            }
+          }
+        }
+        if (!picked) {
           showError(kind, detail ?? playerErrorMessage(kind));
           return;
         }
         state.running = false;
-        applySource(next, at, true);
+        applyTransport(picked.source, picked.transport, at);
       } catch (err) {
         if (err instanceof Error && err.message) {
           const nested = classifyPlayerError(err.message);
@@ -182,7 +207,7 @@ export function PlayerScreen() {
         state.running = false;
       }
     },
-    [player, subjectId, detailPath, season, episode, applySource, showError],
+    [player, ctx, season, episode, subjectId, detailPath, applyTransport, showError, transport],
   );
 
   // Real native errors from expo-video statusChange — classified, not assumed to be "decoder".
@@ -211,6 +236,7 @@ export function PlayerScreen() {
     const t = timeUpdate?.currentTime ?? position;
     const d = player.duration;
     setPosition(t);
+    setBufferedPosition(timeUpdate?.bufferedPosition ?? 0);
     if (d > 0) setDuration(d);
     if (activeTrack) setCurrentCue(cueAt(cues, t * 1000, subtitleOffset * 1000));
 
@@ -232,7 +258,7 @@ export function PlayerScreen() {
     }
   }, [timeUpdate, player, position, activeTrack, cues, subtitleOffset, subjectId, detailPath, mediaType, title, season, episode, saveProgress, route.params]);
 
-  // Save on unmount (leaving the player) and when completed.
+  // Save on unmount (leaving the player).
   useEffect(() => {
     return () => {
       const t = player.currentTime;
@@ -251,7 +277,6 @@ export function PlayerScreen() {
           completed: d > 0 && t / d > 0.95,
         });
       }
-      void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player]);
@@ -275,7 +300,7 @@ export function PlayerScreen() {
       setCurrentCue(null);
       if (!track) return;
       try {
-        const res = await fetch(track.url, { headers: PROVIDER_MEDIA_HEADERS });
+        const res = await fetch(track.url, { headers: transport?.headers });
         if (!res.ok) throw new Error(String(res.status));
         const body = await res.text();
         setCues(parseSrt(body));
@@ -284,7 +309,7 @@ export function PlayerScreen() {
         setFailMessage("This subtitle track could not be loaded.");
       }
     },
-    [],
+    [transport],
   );
 
   const showControls = useCallback(() => {
@@ -293,7 +318,7 @@ export function PlayerScreen() {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
       if (player.playing) {
-        Animated.timing(controlsOpacity, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => setControlsVisible(false));
+        Animated.timing(controlsOpacity, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => setControlsVisible(false));
       }
     }, 3200);
   }, [player, controlsOpacity]);
@@ -314,30 +339,40 @@ export function PlayerScreen() {
     [player, showControls],
   );
 
+  const togglePlay = useCallback(() => {
+    if (player.playing) player.pause();
+    else player.play();
+    showControls();
+  }, [player, showControls]);
+
   /** Explicit user quality choice: resets the recovery budget for the new selection. */
   const switchSource = useCallback(
     (next: StreamSource) => {
       setQualityPickerOpen(false);
-      recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
-      applySource(next, player.currentTime, true);
+      recoveryRef.current = { attempts: 0, triedUris: new Set<string>(), running: false };
+      const chain = transportChain(next, ctx);
+      const direct = chain[0];
+      if (direct) applyTransport(next, direct, player.currentTime);
     },
-    [applySource, player],
+    [applyTransport, player, ctx],
   );
 
-  /** Manual retry: fresh links and a clean recovery budget. */
+  /** Manual retry: fresh links, clean budget, back to direct transport. */
   const retry = useCallback(() => {
     setStatus("loading");
     setFailMessage(null);
-    recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
+    recoveryRef.current = { attempts: 0, triedUris: new Set<string>(), running: false };
     if (source) {
-      applySource(source, player.currentTime, true);
+      const chain = transportChain(source, ctx);
+      const direct = chain[0];
+      if (direct) applyTransport(source, direct, player.currentTime);
     } else {
       void recover("expired", null);
     }
-  }, [source, applySource, player, recover]);
+  }, [source, applyTransport, player, ctx, recover]);
 
-  const landscape = width > height;
   const active = source ?? selectSource(sources, null);
+  const episodeLabel = mediaType === "series" ? `Season ${season} · Episode ${episode}` : null;
 
   if (!active) {
     return (
@@ -345,14 +380,16 @@ export function PlayerScreen() {
         <View style={styles.errorOverlay}>
           <Text style={styles.errorTitle}>Nothing to play</Text>
           <Text style={styles.errorMessage}>Only preview clips were returned for this title, and previews cannot be played here.</Text>
-          <Button label="Back" variant="quiet" onPress={() => navigation.goBack()} style={{ alignSelf: "stretch" }} />
+          <Pressable style={styles.errorBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.errorBtnText}>Back</Text>
+          </Pressable>
         </View>
       </View>
     );
   }
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View style={[styles.root, { paddingTop: isTV ? 0 : insets.top, paddingBottom: isTV ? 0 : insets.bottom }]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={showControls}>
         <VideoView
           player={player}
@@ -366,15 +403,17 @@ export function PlayerScreen() {
 
       {/* Subtitle overlay */}
       {activeTrack && currentCue ? (
-        <View style={[styles.subtitleOverlay, { bottom: landscape ? 90 : 110 }]} pointerEvents="none">
+        <View style={[styles.subtitleOverlay, { bottom: 96 }]} pointerEvents="none">
           <Text style={styles.subtitleText}>{currentCue.text}</Text>
         </View>
       ) : null}
 
-      {status === "loading" || buffering ? (
+      {status === "loading" || (buffering && status === "playing") ? (
         <View style={styles.centerOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color={palette.accent} />
-          <Text style={styles.bufferLabel}>Preparing stream…</Text>
+          <Text style={styles.bufferLabel}>
+            {transport?.label === "proxy" ? "Streaming via relay…" : "Preparing stream…"}
+          </Text>
         </View>
       ) : null}
 
@@ -382,136 +421,80 @@ export function PlayerScreen() {
         <View style={styles.errorOverlay}>
           <Text style={styles.errorTitle}>Playback problem</Text>
           <Text style={styles.errorMessage}>{failMessage ?? "Something interrupted this stream."}</Text>
-          <Button label="Retry" onPress={retry} style={{ alignSelf: "stretch" }} />
-          <Button label="Back" variant="quiet" onPress={() => navigation.goBack()} style={{ alignSelf: "stretch" }} />
+          <Pressable style={[styles.errorBtn, { backgroundColor: palette.accent }]} onPress={retry}>
+            <Text style={[styles.errorBtnText, { color: "#160B08" }]}>Retry</Text>
+          </Pressable>
+          <Pressable style={styles.errorBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.errorBtnText}>Back</Text>
+          </Pressable>
         </View>
       ) : null}
 
       {controlsVisible && status !== "error" ? (
-        <Animated.View style={[styles.controls, { opacity: controlsOpacity }]}>
-          <Pressable style={styles.back} onPress={() => navigation.goBack()} hitSlop={8}>
-            <ChevronLeft size={24} color={palette.textPrimary} />
-          </Pressable>
-
-          <View style={styles.controlsCenter}>
-            <Pressable style={styles.skipBtn} onPress={() => skip(-10)}>
-              <RotateCcw size={22} color={palette.textPrimary} />
-              <Text style={styles.skipLabel}>10</Text>
-            </Pressable>
-            <Pressable
-              style={styles.playPause}
-              onPress={() => {
-                if (player.playing) player.pause();
-                else player.play();
-                showControls();
-              }}
-            >
-              {isPlaying ? (
-                <Pause size={26} color="#1A0E0A" fill="#1A0E0A" />
-              ) : (
-                <Play size={26} color="#1A0E0A" fill="#1A0E0A" />
-              )}
-            </Pressable>
-            <Pressable style={styles.skipBtn} onPress={() => skip(10)}>
-              <RotateCw size={22} color={palette.textPrimary} />
-              <Text style={styles.skipLabel}>10</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.seekRow}>
-            <Text style={styles.timeLabel}>{fmt(position)}</Text>
-            <Slider
-              style={styles.slider}
-              minimumValue={0}
-              maximumValue={duration || 1}
-              value={position}
-              minimumTrackTintColor={palette.accent}
-              maximumTrackTintColor="rgba(244,242,237,0.25)"
-              thumbTintColor={palette.accent}
-              onSlidingComplete={(v) => {
-                player.currentTime = v;
-                showControls();
-              }}
-            />
-            <Text style={styles.timeLabel}>{duration > 0 ? fmt(duration) : "--:--"}</Text>
-          </View>
-
-          <View style={styles.bottomRow}>
-            <Pressable style={styles.bottomBtn} onPress={() => { void loadCaptions(); setSubtitlePickerOpen(true); }}>
-              <Subtitles size={16} color={activeTrack ? palette.accent : palette.textPrimary} />
-              <Text style={styles.bottomLabel}>{activeTrack ? activeTrack.languageName : "Subtitles"}</Text>
-            </Pressable>
-            <Pressable style={styles.bottomBtn} onPress={() => setQualityPickerOpen(true)}>
-              <Gauge size={16} color={palette.textPrimary} />
-              <Text style={styles.bottomLabel}>{active.resolution ?? "Auto"}</Text>
-            </Pressable>
-          </View>
+        <Animated.View style={[styles.chromeWrap, { opacity: controlsOpacity }]} pointerEvents="box-none">
+          <PlayerControls
+            title={title}
+            episodeLabel={episodeLabel}
+            transportLabel={transport?.label === "proxy" ? "Relay" : "Streaming"}
+            position={position}
+            duration={duration}
+            buffered={bufferedPosition}
+            isPlaying={isPlaying}
+            quality={active.resolution}
+            subtitleLabel={activeTrack ? activeTrack.languageName : null}
+            isTV={isTV}
+            onTogglePlay={togglePlay}
+            onSkip={skip}
+            onSeek={(t) => {
+              player.currentTime = t;
+              showControls();
+            }}
+            onBack={() => navigation.goBack()}
+            onQuality={() => setQualityPickerOpen(true)}
+            onSubtitles={() => {
+              void loadCaptions();
+              setSubtitlePickerOpen(true);
+            }}
+          />
         </Animated.View>
       ) : null}
 
       {/* Quality picker — verified full-length sources only, best-first. */}
       {qualityPickerOpen ? (
-        <Sheet title="Quality" onClose={() => setQualityPickerOpen(false)}>
-          {selectableSources(sources).map((s) => (
-            <Pressable key={s.url} style={[styles.option, s.url === active.url && styles.optionActive]} onPress={() => switchSource(s)}>
-              <Text style={styles.optionTitle}>{s.resolution ?? "Auto"}</Text>
-              <Text style={styles.optionMeta}>
-                {[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format].filter(Boolean).join(" · ")}
-              </Text>
-            </Pressable>
-          ))}
-        </Sheet>
+        <PickerSheet title="Quality" onClose={() => setQualityPickerOpen(false)}>
+          <QualityOptions sources={selectableSources(sources)} activeUri={active.url} onPick={switchSource} />
+          {qualityList.length > 0 ? (
+            <Text style={styles.pickerNote}>{qualityList.length} full-length qualities available</Text>
+          ) : null}
+        </PickerSheet>
       ) : null}
 
       {/* Subtitle picker */}
       {subtitlePickerOpen ? (
-        <Sheet title="Subtitles" onClose={() => setSubtitlePickerOpen(false)}>
-          <Pressable style={[styles.option, activeTrack === null && styles.optionActive]} onPress={() => { setActiveTrack(null); setSubtitlePickerOpen(false); }}>
-            <Text style={styles.optionTitle}>Off</Text>
-          </Pressable>
-          {(tracks ?? []).map((t) => (
-            <Pressable key={t.id} style={[styles.option, activeTrack?.id === t.id && styles.optionActive]} onPress={() => { void selectTrack(t); setSubtitlePickerOpen(false); }}>
-              <Text style={styles.optionTitle}>{t.languageName}</Text>
-            </Pressable>
-          ))}
-          {activeTrack ? (
-            <View style={{ marginTop: spacing.md }}>
-              <Text style={styles.optionMeta}>Subtitle delay: {subtitleOffset.toFixed(1)}s</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={-5}
-                maximumValue={5}
-                step={0.5}
-                value={subtitleOffset}
-                minimumTrackTintColor={palette.accent}
-                maximumTrackTintColor="rgba(244,242,237,0.25)"
-                thumbTintColor={palette.accent}
-                onValueChange={setSubtitleOffset}
-              />
-            </View>
-          ) : null}
-          {tracks !== null && tracks.length === 0 ? (
-            <Text style={styles.optionMeta}>No caption tracks were returned for this title.</Text>
-          ) : null}
-        </Sheet>
+        <PickerSheet title="Subtitles" onClose={() => setSubtitlePickerOpen(false)}>
+          <SubtitleOptions
+            tracks={tracks}
+            activeId={activeTrack?.id ?? null}
+            offset={subtitleOffset}
+            onOffset={setSubtitleOffset}
+            onPick={(t) => {
+              void selectTrack(t);
+              setSubtitlePickerOpen(false);
+            }}
+            onOff={() => {
+              setActiveTrack(null);
+              setSubtitlePickerOpen(false);
+            }}
+          />
+        </PickerSheet>
       ) : null}
     </View>
   );
 }
 
-function Sheet({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <Pressable style={styles.sheetBackdrop} onPress={onClose}>
-      <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation?.()}>
-        <Text style={styles.sheetTitle}>{title}</Text>
-        {children}
-      </Pressable>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
+  chromeWrap: { ...StyleSheet.absoluteFillObject },
   centerOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", gap: spacing.md },
   bufferLabel: { color: palette.textSecondary, fontSize: 13 },
   subtitleOverlay: { position: "absolute", left: spacing.xxl, right: spacing.xxl, alignItems: "center" },
@@ -524,7 +507,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 6,
     textShadowOffset: { width: 0, height: 1 },
     backgroundColor: "rgba(8,10,13,0.45)",
-    borderRadius: radius.sm,
+    borderRadius: 8,
     paddingHorizontal: spacing.md,
     paddingVertical: 6,
     overflow: "hidden",
@@ -537,49 +520,16 @@ const styles = StyleSheet.create({
     padding: spacing.xxl,
     gap: spacing.md,
   },
-  errorTitle: { ...typeScale.title, color: palette.textPrimary },
-  errorMessage: { ...typeScale.body, color: palette.textSecondary, textAlign: "center", marginBottom: spacing.md },
-  controls: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(8,10,13,0.42)", justifyContent: "space-between" },
-  back: { position: "absolute", top: 16, left: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(8,10,13,0.55)", alignItems: "center", justifyContent: "center" },
-  controlsCenter: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 34 },
-  skipBtn: { alignItems: "center", justifyContent: "center" },
-  skipLabel: { color: palette.textPrimary, fontSize: 9, fontWeight: "700", marginTop: -2 },
-  playPause: {
-    width: 66,
-    height: 66,
-    borderRadius: 33,
-    backgroundColor: palette.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  seekRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.lg, gap: spacing.sm, marginBottom: spacing.xl },
-  slider: { flex: 1 },
-  timeLabel: { color: palette.textPrimary, fontSize: 11, fontVariant: ["tabular-nums"], minWidth: 40, textAlign: "center" },
-  bottomRow: { position: "absolute", bottom: 54, left: spacing.lg, right: spacing.lg, flexDirection: "row", gap: spacing.md },
-  bottomBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(8,10,13,0.55)", borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
-  bottomLabel: { color: palette.textPrimary, fontSize: 12, fontWeight: "600" },
-  sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: palette.scrim, justifyContent: "flex-end" },
-  sheet: {
-    backgroundColor: palette.backgroundElevated,
-    borderTopLeftRadius: radius.sheet,
-    borderTopRightRadius: radius.sheet,
-    borderColor: palette.glassStroke,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    padding: spacing.xl,
-    gap: spacing.sm,
-  },
-  sheetTitle: { ...typeScale.title, color: palette.textPrimary, marginBottom: spacing.sm },
-  option: {
-    borderRadius: radius.md,
-    backgroundColor: palette.glassFill,
+  errorTitle: { fontSize: 20, fontWeight: "800", color: palette.textPrimary },
+  errorMessage: { color: palette.textSecondary, textAlign: "center", marginBottom: spacing.sm, lineHeight: 21 },
+  errorBtn: {
+    backgroundColor: "rgba(244,242,237,0.10)",
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
-    padding: spacing.lg,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 40,
   },
-  optionActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.10)" },
-  optionTitle: { color: palette.textPrimary, fontWeight: "700", fontSize: 15 },
-  optionMeta: { color: palette.textMuted, fontSize: 12 },
+  errorBtnText: { color: palette.textPrimary, fontWeight: "800", fontSize: 14 },
+  pickerNote: { color: palette.textMuted, fontSize: 12, textAlign: "center", marginTop: spacing.xs },
 });

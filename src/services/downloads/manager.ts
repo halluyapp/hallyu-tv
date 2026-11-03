@@ -1,5 +1,6 @@
 import { resolveStreams } from "@/services/provider/adapter";
 import { selectSource } from "@/services/provider/streams";
+import { proxyUri } from "@/services/provider/transport";
 import { LegacyFileSystem, DOWNLOADS_DIR } from "./fs";
 import { isNativeDownloaderAvailable, nativeDownloader } from "./nativeDownloader";
 import { downloadKey, reasonMessage, sizeWithinTolerance, DM_REASON, DM_STATUS } from "./reasons";
@@ -347,9 +348,20 @@ class DownloadManager {
     }
   }
 
-  /** Re-resolve a fresh URL and start the job again with its engine. */
+  /**
+   * Re-resolve a fresh URL and start the job again with its engine.
+   *
+   * Signed URLs expire quickly, so every retry re-resolves. The first fresh
+   * retry goes direct to the CDN; if a fresh direct URL already failed once
+   * (throttled network, expired-again URL, header gate), later retries route
+   * through the media proxy, which resolves the signed URL server-side and
+   * needs no headers from the client. Both engines take a plain URL, so the
+   * swap is transparent to them.
+   */
   private async restartWithFreshSource(job: DownloadJob): Promise<void> {
     const id = job.id;
+    const attempt = (job.freshRetries ?? 0) + 1;
+    const viaProxy = attempt >= 2;
     this.update(id, { state: "resolving", failureReason: null });
     try {
       const res = await resolveStreams(job.subjectId, job.detailPath, job.season, job.episode);
@@ -358,10 +370,13 @@ class DownloadManager {
       const fresh = selectSource(res.sources, job.source.resolution) ?? selectSource(res.sources, null);
       if (!fresh) throw new Error("No downloadable source was returned.");
 
+      const ctx = { subjectId: job.subjectId, detailPath: job.detailPath, season: job.season, episode: job.episode };
+      const effective = viaProxy ? { ...fresh, url: proxyUri(fresh, ctx) } : fresh;
+
       const paths = jobPaths(job.title, job.season, job.episode);
       const next: DownloadJob = {
         ...job,
-        source: fresh,
+        source: effective,
         expectedBytes: fresh.sizeBytes ?? null,
         state: "queued",
         receivedBytes: 0,
@@ -369,6 +384,8 @@ class DownloadManager {
         partPath: paths.partPath,
         finalPath: job.engine === "native" ? job.finalPath : paths.finalPath,
         failureReason: null,
+        freshRetries: attempt,
+        viaProxy,
       };
       this.jobs.set(id, next);
       this.emit();
