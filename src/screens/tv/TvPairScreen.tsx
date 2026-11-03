@@ -1,6 +1,7 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { consumePairing, createTvChallenge } from "@/services/pairing";
 import * as SecureStore from "expo-secure-store";
+import * as Crypto from "expo-crypto";
 import React, { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
@@ -31,8 +32,7 @@ export function TvPairScreen() {
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function begin() {
-      const bytes = new Uint8Array(12);
-      crypto.getRandomValues(bytes);
+      const bytes = Crypto.getRandomValues(new Uint8Array(12));
       const nonce = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
       nonceRef.current = nonce;
       try {

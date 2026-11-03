@@ -10,6 +10,7 @@ import { Platform } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import * as SecureStore from "expo-secure-store";
+import * as Crypto from "expo-crypto";
 import { supabase } from "@/services/supabase";
 
 /** Rork Auth provider — Google sign-in with secure (Keystore-backed) sessions. */
@@ -18,22 +19,54 @@ const AUTH_URL = process.env.EXPO_PUBLIC_RORK_AUTH_URL!;
 const APP_KEY = process.env.EXPO_PUBLIC_RORK_APP_KEY!;
 const PROJECT_ID = process.env.EXPO_PUBLIC_PROJECT_ID!;
 
+// Hermes (React Native) has no global btoa/atob/crypto.subtle — these helpers
+// use expo-crypto plus a local base64 encoder so sign-in works on device.
+const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i]!;
+    const b1 = i + 1 < bytes.length ? bytes[i + 1]! : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2]! : 0;
+    out += B64_CHARS[b0 >> 2]!;
+    out += B64_CHARS[((b0 & 3) << 4) | (b1 >> 4)]!;
+    out += i + 1 < bytes.length ? B64_CHARS[((b1 & 15) << 2) | (b2 >> 6)]! : "=";
+    out += i + 2 < bytes.length ? B64_CHARS[b2 & 63]! : "=";
+  }
+  return out;
+}
+
+function base64Decode(b64: string): string {
+  const clean = b64.replace(/=+$/, "");
+  let out = "";
+  let bits = 0;
+  let acc = 0;
+  for (const ch of clean) {
+    const idx = B64_CHARS.indexOf(ch);
+    if (idx === -1) continue;
+    acc = (acc << 6) | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode((acc >> bits) & 0xff);
+    }
+  }
+  return out;
+}
+
+function toBase64Url(s: string): string {
+  return s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 function generateCodeVerifier(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const bytes = Crypto.getRandomValues(new Uint8Array(32));
+  return toBase64Url(bytesToBase64(bytes));
 }
 
 async function generateCodeChallenge(verifier: string): Promise<string> {
-  const data = new TextEncoder().encode(verifier);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return btoa(String.fromCharCode(...new Uint8Array(hash)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, new TextEncoder().encode(verifier));
+  return toBase64Url(bytesToBase64(new Uint8Array(digest)));
 }
 
 export interface AuthUser {
@@ -48,7 +81,7 @@ function userFromToken(token: string): AuthUser | null {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
     const base64 = (parts[1] ?? "").replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(base64));
+    const payload = JSON.parse(base64Decode(base64));
     if (payload.exp && payload.exp * 1000 < Date.now()) return null;
     return {
       id: payload.sub,
