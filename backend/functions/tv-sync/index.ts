@@ -7,7 +7,7 @@ import { createAdminClient, json, corsHeaders, sha256 } from "../_shared/auth.ts
  * verification and are instructed to de-pair.
  *
  * Actions:
- *  - "get_state":   returns { watch_progress[], watchlist[] } for the owning user
+ *  - "get_state":   returns { watchlist[], resume[], watch_progress[] } for the owning user
  *  - "upsert_progress": writes one watch_progress row
  *  - "toggle_watchlist": insert-or-delete one watchlist row
  */
@@ -28,9 +28,10 @@ Deno.serve(async (req) => {
     const admin = createAdminClient();
     const secretHash = await sha256(secret);
 
+    // session_secret_hash MUST be selected: the credential check below compares it.
     const { data: device } = await admin
       .from("devices")
-      .select("id, user_id, device_name, revoked_at")
+      .select("id, user_id, device_name, revoked_at, session_secret_hash")
       .eq("id", deviceId)
       .maybeSingle();
 
@@ -55,9 +56,15 @@ Deno.serve(async (req) => {
           .order("created_at", { ascending: false })
           .limit(200),
       ]);
+      const progressRows = progress.data ?? [];
       return json({
-        watch_progress: progress.data ?? [],
+        watch_progress: progressRows,
         watchlist: watchlist.data ?? [],
+        // "resume" is what the TV home renders: unfinished progress rows.
+        resume: progressRows.filter(
+          (p: Record<string, unknown>) =>
+            !p.completed && typeof p.position_seconds === "number" && p.position_seconds > 5,
+        ),
       });
     }
 

@@ -1,5 +1,5 @@
 import { PosterCard } from "@/components/ui/PosterCard";
-import { EmptyState, ErrorState, OfflineBanner, SkeletonRail } from "@/components/ui/States";
+import { EmptyState, ErrorState, SkeletonRail } from "@/components/ui/States";
 import { useGate } from "@/components/auth/GateProvider";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
@@ -148,7 +148,6 @@ export function HomeScreen() {
           <Search size={20} color={palette.textSecondary} />
         </Pressable>
       </View>
-      {!user && !error ? <OfflineBanner /> : null}
 
       {error && sections === null ? (
         <ErrorState message={error} onRetry={() => void load()} />

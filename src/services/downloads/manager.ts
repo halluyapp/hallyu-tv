@@ -1,4 +1,6 @@
+import { resolveStreams } from "@/services/provider/adapter";
 import { LegacyFileSystem, DOWNLOADS_DIR } from "./fs";
+import { jobPaths } from "./paths";
 import type { DownloadJob, DownloadState, DownloadRequest } from "./types";
 
 export { DOWNLOADS_DIR };
@@ -17,6 +19,8 @@ export { DOWNLOADS_DIR };
 
 const REGISTRY_KEY = "download_jobs_v1";
 export const MAX_CONCURRENT_DOWNLOADS = 2;
+/** Minimum free disk space a download must leave untouched (256 MB). */
+const MIN_FREE_DISK_BYTES = 256 * 1024 * 1024;
 
 type Listener = (jobs: DownloadJob[]) => void;
 
@@ -90,6 +94,7 @@ class DownloadManager {
     if (existing) return;
 
     const id = `${request.subjectId}_${request.season}_${request.episode}_${Date.now()}`;
+    const paths = jobPaths(request.title, request.season, request.episode);
     const job: DownloadJob = {
       id,
       ...request,
@@ -97,8 +102,8 @@ class DownloadManager {
       receivedBytes: 0,
       totalBytes: request.expectedBytes ?? null,
       createdAt: Date.now(),
-      partPath: `${DOWNLOADS_DIR}${sanitizeFilename(request.title)}_${request.season}_${request.episode}.part`,
-      finalPath: `${DOWNLOADS_DIR}${sanitizeFilename(request.title)}_${request.season}_${request.episode}.mp4`,
+      partPath: paths.partPath,
+      finalPath: paths.finalPath,
       failureReason: null,
     };
     this.jobs.set(id, job);
@@ -121,6 +126,11 @@ class DownloadManager {
     this.transition(job.id, "connecting");
     try {
       await LegacyFileSystem.ensureDir();
+      const free = await LegacyFileSystem.freeDiskBytes();
+      const wanted = job.expectedBytes ?? 0;
+      if (free !== null && free < wanted + MIN_FREE_DISK_BYTES) {
+        throw new Error("Not enough free storage on this device");
+      }
       const task = LegacyFileSystem.createDownloadTask(
         job,
         (received, total) => {
@@ -134,7 +144,7 @@ class DownloadManager {
           // Completed: validate, then atomically move .part -> final.
           this.transition(job.id, "verifying");
           try {
-            const ok = await LegacyFileSystem.finalizePart(job.partPath, job.finalPath);
+            const ok = await LegacyFileSystem.finalizePart(job.partPath, job.finalPath, job.expectedBytes);
             if (!ok) throw new Error("File validation failed");
             this.update(job.id, { state: "completed", finalPath: job.finalPath });
           } catch (err) {
@@ -182,20 +192,41 @@ class DownloadManager {
       this.update(id, { state: "downloading" });
       this.tasks.get(id)?.resume();
     } else if (job.state === "failed" || job.state === "cancelled") {
-      // Restart from scratch on a fresh resolution (signed URLs may have expired).
-      this.jobs.delete(id);
-      this.emit();
-      void this.enqueue({
-        subjectId: job.subjectId,
-        detailPath: job.detailPath,
-        season: job.season,
-        episode: job.episode,
-        title: job.title,
-        posterUrl: job.posterUrl,
-        mediaType: job.mediaType,
-        source: job.source,
-        expectedBytes: job.expectedBytes,
-      });
+      // Signed URLs expire quickly — re-resolve a fresh source, falling back to
+      // the same quality when the provider still offers it.
+      void (async () => {
+        try {
+          const res = await resolveStreams(
+            job.subjectId,
+            job.detailPath,
+            job.season,
+            job.episode,
+          );
+          if (res.sources.length === 0) throw new Error(res.note ?? "No downloadable source was returned.");
+          const fresh =
+            res.sources.find((s) => s.resolution === job.source.resolution) ??
+            res.sources[res.sources.length - 1] ??
+            job.source;
+          this.jobs.delete(id);
+          this.emit();
+          await this.enqueue({
+            subjectId: job.subjectId,
+            detailPath: job.detailPath,
+            season: job.season,
+            episode: job.episode,
+            title: job.title,
+            posterUrl: job.posterUrl,
+            mediaType: job.mediaType,
+            source: fresh,
+            expectedBytes: fresh.sizeBytes,
+          });
+        } catch (err) {
+          this.update(id, {
+            state: "failed",
+            failureReason: err instanceof Error ? err.message : "Could not refresh the download source",
+          });
+        }
+      })();
     }
   }
 
@@ -228,16 +259,6 @@ class DownloadManager {
   all(): DownloadJob[] {
     return Array.from(this.jobs.values());
   }
-}
-
-function sanitizeFilename(name: string): string {
-  return (
-    name
-      .normalize("NFKD")
-      .replace(/[^a-zA-Z0-9-_ .]/g, "")
-      .replace(/\s+/g, "_")
-      .slice(0, 64) || "title"
-  );
 }
 
 export const downloadManager = new DownloadManager();

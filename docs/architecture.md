@@ -1,6 +1,6 @@
 # Architecture
 
-Emberplay is a React Native (TypeScript, Expo SDK 54) streaming client for
+Hallyu TV is a React Native (TypeScript, Expo SDK 54) streaming client for
 phone/tablet plus Android TV, backed by Supabase as the account control plane.
 
 ## Layers

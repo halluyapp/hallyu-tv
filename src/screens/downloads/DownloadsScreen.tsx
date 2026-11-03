@@ -5,6 +5,7 @@ import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { useAuth } from "@/hooks/useAuth";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { downloadManager } from "@/services/downloads/manager";
+import { absolutePathFor } from "@/services/downloads/fs";
 import { DownloadJob } from "@/services/downloads/types";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -99,7 +100,7 @@ export function DownloadsScreen() {
                 sources: [{
                   resolution: "Offline",
                   format: "MP4",
-                  url: offlineUri(job),
+                  url: absolutePathFor(job.finalPath),
                   sizeBytes: job.totalBytes,
                   durationSeconds: null,
                   codec: job.source.codec,
@@ -159,11 +160,6 @@ export function DownloadsScreen() {
       )}
     </View>
   );
-}
-
-function offlineUri(job: DownloadJob): string {
-  // expo-file-system documentDirectory-based file URI for offline playback.
-  return job.finalPath.startsWith("file:") ? job.finalPath : `file://${job.finalPath.replace(/^\//, "")}`;
 }
 
 const styles = StyleSheet.create({

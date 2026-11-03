@@ -14,6 +14,7 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -24,6 +25,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight } from "lucide-react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+/** Paired TVs authenticate with a device session, not a user login — the guest gate is phone-only. */
+const IS_TV = Platform.isTV;
 
 export function DetailsScreen() {
   const route = useRoute<RouteProp<RootStackParamList, "Details">>();
@@ -39,7 +43,6 @@ export function DetailsScreen() {
   const [expanded, setExpanded] = useState(false);
   const [season, setSeason] = useState<SeasonInfo | null>(null);
   const [episode, setEpisode] = useState(1);
-  const [episodeTitles, setEpisodeTitles] = useState<Record<number, { title: string | null; releaseDate: string | null }>>({});
   const [resolving, setResolving] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
 
@@ -63,16 +66,18 @@ export function DetailsScreen() {
 
   const saved = detail ? inWatchlist(detail.subjectId) : false;
   const currentSeason = detail?.mediaType === "series" ? season?.season ?? 1 : null;
+  const selectedSeason = season?.season ?? null;
 
   const resume = useMemo(() => {
     if (!detail) return null;
     return resumeFor(detail.subjectId, currentSeason, currentSeason ? episode : null);
   }, [detail, resumeFor, currentSeason, episode, progress]);
 
+  /** Season/episode are passed explicitly — never read from state after a setState. */
   const play = useCallback(
-    async (opts: { resumeAt: number }) => {
+    async (opts: { resumeAt: number; season?: number | null; episode?: number | null }) => {
       if (!detail) return;
-      if (!user) {
+      if (!user && !IS_TV) {
         // Guest gate: explain, sign in, return to this exact title. Playback is
         // never auto-started — the user re-taps Play.
         showGate({
@@ -81,10 +86,12 @@ export function DetailsScreen() {
         });
         return;
       }
+      const selSeason = opts.season !== undefined ? opts.season : currentSeason;
+      const selEpisode = opts.episode !== undefined ? opts.episode : currentSeason ? episode : 0;
       setResolving(true);
       setResolutionError(null);
       try {
-        const res = await resolveStreams(detail.subjectId, detail.detailPath, currentSeason ?? 0, currentSeason ? episode : 0);
+        const res = await resolveStreams(detail.subjectId, detail.detailPath, selSeason ?? 0, selEpisode ?? 0);
         if (res.sources.length === 0) {
           setResolutionError(res.note ?? "No stream is available for this selection.");
           return;
@@ -95,8 +102,8 @@ export function DetailsScreen() {
           title: detail.title,
           posterUrl: detail.posterUrl,
           mediaType: detail.mediaType,
-          season: currentSeason ?? 0,
-          episode: currentSeason ? episode : 0,
+          season: selSeason ?? 0,
+          episode: selEpisode ?? 0,
           resumeAt: opts.resumeAt,
           sources: res.sources,
         });
@@ -113,9 +120,9 @@ export function DetailsScreen() {
     [detail, user, showGate, navigation, currentSeason, episode],
   );
 
-  const startDownload = useCallback(() => {
+  const startDownload = useCallback((opts: { season?: number | null; episode?: number | null }) => {
     if (!detail) return;
-    if (!user) {
+    if (!user && !IS_TV) {
       showGate({
         title: "Sign in to download",
         message: "Downloads are tied to your account and live only on this device.",
@@ -127,10 +134,12 @@ export function DetailsScreen() {
 
     async function startDownloadAfterAuth() {
       if (!detail) return;
+      const selSeason = opts.season !== undefined ? opts.season : currentSeason;
+      const selEpisode = opts.episode !== undefined ? opts.episode : currentSeason ? episode : 0;
       setResolving(true);
       setResolutionError(null);
       try {
-        const res = await resolveStreams(detail.subjectId, detail.detailPath, currentSeason ?? 0, currentSeason ? episode : 0);
+        const res = await resolveStreams(detail.subjectId, detail.detailPath, selSeason ?? 0, selEpisode ?? 0);
         const pick = res.sources[res.sources.length - 1] ?? null; // most data-efficient quality
         if (!pick) {
           setResolutionError("No downloadable source was returned for this selection.");
@@ -139,8 +148,8 @@ export function DetailsScreen() {
         await downloadManager.enqueue({
           subjectId: detail.subjectId,
           detailPath: detail.detailPath,
-          season: currentSeason ?? 0,
-          episode: currentSeason ? episode : 0,
+          season: selSeason ?? 0,
+          episode: selEpisode ?? 0,
           title: detail.title,
           posterUrl: detail.posterUrl,
           mediaType: detail.mediaType,
@@ -216,7 +225,7 @@ export function DetailsScreen() {
           <Pressable style={styles.iconAction} onPress={onWatchlist}>
             {saved ? <BookmarkCheck size={20} color={palette.accent} /> : <Bookmark size={20} color={palette.textSecondary} />}
           </Pressable>
-          <Pressable style={styles.iconAction} onPress={startDownload}>
+          <Pressable style={styles.iconAction} onPress={() => startDownload({})}>
             <Download size={20} color={palette.textSecondary} />
           </Pressable>
         </View>
@@ -268,10 +277,11 @@ export function DetailsScreen() {
                 return (
                   <Pressable
                     key={ep}
-                    style={[styles.episodeRow, season?.season === season?.season && episode === ep && styles.episodeRowActive]}
+                    style={[styles.episodeRow, season?.season === selectedSeason && episode === ep && styles.episodeRowActive]}
                     onPress={() => {
                       setEpisode(ep);
-                      void play({ resumeAt: p && !p.completed ? p.position_seconds : 0 });
+                      // Selection is passed explicitly so a fast tap can never start the previous episode.
+                      void play({ resumeAt: p && !p.completed ? p.position_seconds : 0, season: season?.season ?? null, episode: ep });
                     }}
                   >
                     <View style={styles.episodeNumber}>
@@ -279,10 +289,10 @@ export function DetailsScreen() {
                     </View>
                     <View style={{ flex: 1, gap: 2 }}>
                       <Text style={styles.episodeTitle} numberOfLines={1}>
-                        {episodeTitles[ep]?.title ?? `Episode ${ep}`}
+                        {`Episode ${ep}`}
                       </Text>
                       <Text style={styles.episodeMeta}>
-                        {watched ? "Watched" : p ? `Watching · ${Math.floor(p.position_seconds / 60)} min in` : episodeTitles[ep]?.releaseDate ?? "Ready to play"}
+                        {watched ? "Watched" : p ? `Watching · ${Math.floor(p.position_seconds / 60)} min in` : "Ready to play"}
                       </Text>
                     </View>
                     <ChevronRight size={16} color={palette.textMuted} />
@@ -309,13 +319,6 @@ export function DetailsScreen() {
                 </View>
               ))}
             </View>
-          </View>
-        ) : null}
-
-        {detail.trailerUrl ? (
-          <View style={{ marginTop: spacing.xl }}>
-            <Text style={styles.sectionTitle}>Trailer</Text>
-            <Text style={styles.trailerNote}>A trailer is available for this title and plays in the player.</Text>
           </View>
         ) : null}
 
@@ -409,7 +412,6 @@ const styles = StyleSheet.create({
   castAvatar: { width: 60, height: 60, borderRadius: 30 },
   castName: { color: palette.textPrimary, fontSize: 11, fontWeight: "600", textAlign: "center" },
   castRole: { color: palette.textMuted, fontSize: 10, textAlign: "center" },
-  trailerNote: { color: palette.textMuted, fontSize: 13 },
   deviceHint: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   deviceHintText: { color: palette.textMuted, fontSize: 12, flex: 1 },
 });

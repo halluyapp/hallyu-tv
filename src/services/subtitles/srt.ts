@@ -11,10 +11,14 @@ export interface Cue {
 }
 
 function timeToMs(t: string): number {
-  // "00:12:34,567"
+  // "00:12:34,567" — the fraction may be 1-3 digits (",5" = 500ms, ",56" = 560ms).
   const m = t.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
   if (!m) return 0;
-  return Number(m[1]) * 3600_000 + Number(m[2]) * 60_000 + Number(m[3]) * 1000 + Number(m[4]);
+  const h = Number(m[1] ?? 0);
+  const min = Number(m[2] ?? 0);
+  const s = Number(m[3] ?? 0);
+  const ms = Number((m[4] ?? "0").padEnd(3, "0"));
+  return h * 3600_000 + min * 60_000 + s * 1000 + ms;
 }
 
 export function parseSrt(content: string): Cue[] {

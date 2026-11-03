@@ -9,12 +9,14 @@
  *  2. pairing-create refuses unauthenticated phone-origin challenges.
  *  3. tv-sync refuses unauthenticated/unpaired device credentials.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-for (const line of readFileSync(join(root, ".env"), "utf8").split("\n")) {
+// .env is not tracked; fall back to the committed public .env.example.
+const envPath = existsSync(join(root, ".env")) ? join(root, ".env") : join(root, ".env.example");
+for (const line of readFileSync(envPath, "utf8").split("\n")) {
   const m = line.match(/^(EXPO_PUBLIC_[A-Z_]+)=(.*)$/);
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
 }

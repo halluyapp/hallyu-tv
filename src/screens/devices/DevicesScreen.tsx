@@ -1,10 +1,11 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/services/supabase";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Tv, Smartphone, Trash2, ShieldCheck, RefreshCw, Plus } from "lucide-react-native";
+import { Tv, Smartphone, Trash2, ShieldCheck, RefreshCw, Plus, ScanLine, X } from "lucide-react-native";
 import * as SecureStore from "expo-secure-store";
 import { approvePairing } from "@/services/pairing";
 
@@ -25,6 +26,9 @@ export function DevicesScreen() {
   const [codeInput, setCodeInput] = useState("");
   const [pairing, setPairing] = useState(false);
   const [pairMsg, setPairMsg] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -95,7 +99,27 @@ export function DevicesScreen() {
 
       <SectionHeading label="Pair a TV" />
       <View style={styles.pairCard}>
-        <Text style={styles.pairHint}>Enter the 6-digit code shown on your TV.</Text>
+        <Text style={styles.pairHint}>Scan the QR code on your TV, or enter the 6-digit code manually.</Text>
+        <Pressable
+          style={styles.scanBtn}
+          onPress={() => {
+            void (async () => {
+              setPairMsg(null);
+              setScanError(null);
+              if (!cameraPermission?.granted) {
+                const res = await requestCameraPermission();
+                if (!res.granted) {
+                  setScanError("Camera access was declined — enable it in system settings to scan.");
+                  return;
+                }
+              }
+              setScanOpen(true);
+            })();
+          }}
+        >
+          <ScanLine size={15} color={palette.accentBright} />
+          <Text style={styles.scanBtnText}>Scan QR code</Text>
+        </Pressable>
         <View style={styles.pairRow}>
           <TextInput
             style={styles.pairInput}
@@ -133,7 +157,37 @@ export function DevicesScreen() {
           </Pressable>
         </View>
         {pairMsg ? <Text style={pairMsg.includes("success") ? styles.pairOk : styles.error}>{pairMsg}</Text> : null}
+        {scanError ? (
+          <Pressable onPress={() => void Linking.openSettings()}>
+            <Text style={[styles.error, { textDecorationLine: "underline" }]}>{scanError} Open Settings.</Text>
+          </Pressable>
+        ) : null}
       </View>
+
+      {scanOpen ? (
+        <View style={styles.scannerOverlay}>
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+            onBarcodeScanned={({ data }) => {
+              const code = (data ?? "").trim();
+              if (!/^\d{6}$/.test(code)) {
+                // The TV encodes exactly the 6-digit code; anything else is not a Hallyu TV QR.
+                setScanError("That QR code is not a Hallyu TV pairing code.");
+                return;
+              }
+              setCodeInput(code);
+              setPairMsg("Code scanned — review it below and tap Approve.");
+              setScanOpen(false);
+            }}
+          />
+          <View style={styles.scannerFrame} />
+          <Pressable style={styles.scannerClose} onPress={() => setScanOpen(false)} hitSlop={8}>
+            <X size={22} color="#fff" />
+          </Pressable>
+          <Text style={styles.scannerHint}>Point the camera at the QR code on your TV</Text>
+        </View>
+      ) : null}
 
       <View style={styles.noteRow}>
         <ShieldCheck size={13} color={palette.success} />
@@ -206,5 +260,41 @@ const styles = StyleSheet.create({
   pairBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: palette.accent, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.md },
   pairBtnText: { color: palette.textPrimary, fontWeight: "800", fontSize: 13 },
   pairOk: { color: palette.success, fontSize: 12 },
+  scanBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.accentSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: palette.glassFill,
+  },
+  scanBtnText: { color: palette.accentBright, fontWeight: "700", fontSize: 13 },
+  scannerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "#000" },
+  scannerFrame: {
+    position: "absolute",
+    alignSelf: "center",
+    top: "32%",
+    width: 220,
+    height: 220,
+    borderRadius: radius.card,
+    borderWidth: 2,
+    borderColor: palette.accent,
+    backgroundColor: "transparent",
+  },
+  scannerClose: { position: "absolute", top: spacing.xxl, right: spacing.xl, padding: spacing.sm },
+  scannerHint: {
+    position: "absolute",
+    bottom: spacing.xxxl,
+    alignSelf: "center",
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+    paddingHorizontal: spacing.xl,
+  },
   sectionLabel: { ...typeScale.micro, color: palette.textSecondary, paddingHorizontal: spacing.xl, marginTop: spacing.xl, marginBottom: spacing.sm },
 });

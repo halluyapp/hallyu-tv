@@ -21,8 +21,10 @@ jobs:
         with:
           node-version: 20
 
-      # The public, embeddable client configuration is committed in .env by design
-      # (anon key / app key are public values). No secrets are needed here.
+      # .env is not tracked; scripts fall back to the committed public .env.example
+      - name: Restore public env config
+        run: cp .env.example .env
+
       - name: Verify provider API contract
         run: node scripts/verify-provider.mjs
 

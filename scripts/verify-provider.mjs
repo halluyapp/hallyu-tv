@@ -7,14 +7,15 @@
  * Public API, no key required. This script never touches CDN media URLs
  * (they are IP-sensitive); it verifies metadata + stream descriptors only.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Load EXPO_PUBLIC_* from .env if not already in the environment (CI supplies them too).
-for (const line of readFileSync(join(root, ".env"), "utf8").split("\n")) {
+// Load EXPO_PUBLIC_* from .env (falls back to the committed public .env.example).
+const envPath = existsSync(join(root, ".env")) ? join(root, ".env") : join(root, ".env.example");
+for (const line of readFileSync(envPath, "utf8").split("\n")) {
   const m = line.match(/^(EXPO_PUBLIC_[A-Z_]+)=(.*)$/);
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
 }

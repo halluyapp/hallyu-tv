@@ -1,4 +1,5 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { APP_NAME } from "@/config/branding";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { tvSync } from "@/services/pairing";
 import * as SecureStore from "expo-secure-store";
@@ -62,7 +63,7 @@ export function TvHomeScreen() {
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingVertical: spacing.xxl }}>
       <View style={styles.header}>
-        <Text style={styles.brand}>EMBERPLAY</Text>
+        <Text style={styles.brand}>{APP_NAME.toUpperCase()}</Text>
         <Text style={styles.tagline}>Your library, on the big screen</Text>
         <Pressable style={[styles.syncBtn, loading && { opacity: 0.5 }]} onPress={() => void sync()}>
           <RefreshCw size={15} color={palette.textSecondary} />
