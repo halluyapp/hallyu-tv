@@ -1,7 +1,8 @@
 import { providerFetch } from "./client";
+import { normalizeStreamResponse } from "./streams";
 import {
-  CatalogueItem,
   CaptionTrack,
+  CatalogueItem,
   HomeSection,
   ProviderError,
   SeasonInfo,
@@ -111,6 +112,39 @@ export async function fetchDetail(detailPath: string, signal?: AbortSignal): Pro
   };
 }
 
+async function doResolveStreams(
+  subjectId: string,
+  detailPath: string,
+  se: number,
+  ep: number,
+  signal?: AbortSignal,
+): Promise<StreamResolution> {
+  const qs = `detail_path=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
+  const raw = await providerFetch(`/stream/${encodeURIComponent(subjectId)}?${qs}`, {
+    timeoutMs: 20_000,
+    signal,
+  });
+  // Shared normalization (same rules as scripts/verify-provider.mjs and the tests).
+  const n = normalizeStreamResponse(raw);
+  if (n.sources.length === 0) {
+    throw new ProviderError(
+      "no_stream",
+      n.note ?? (n.hasResource ? "No playable source was returned for this selection." : "No stream is available for this title right now."),
+    );
+  }
+  return {
+    subjectId: n.subjectId ?? subjectId,
+    se: n.se || se,
+    ep: n.ep || ep,
+    sources: n.sources,
+    hasResource: n.hasResource && n.sources.length > 0,
+    note: n.note,
+  };
+}
+
+// Identical in-flight resolves share one request (reference: moviebox.ts callKeyed).
+const inFlight = new Map<string, Promise<StreamResolution>>();
+
 /**
  * Resolve playback streams. Movies use se=0/ep=0; series pass real numbers.
  * `detail_path` is REQUIRED by the provider contract (verified 2026-11-03).
@@ -122,37 +156,12 @@ export async function resolveStreams(
   ep = 0,
   signal?: AbortSignal,
 ): Promise<StreamResolution> {
-  const qs = `detail_path=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
-  const raw = await providerFetch(`/stream/${encodeURIComponent(subjectId)}?${qs}`, {
-    timeoutMs: 20_000,
-    signal,
-  });
-  if (typeof raw !== "object" || raw === null) throw new ProviderError("invalid_response", "Stream response was unreadable.");
-  const r = raw as Record<string, any>;
-  if (r.has_resource !== true || !Array.isArray(r.sources)) {
-    throw new ProviderError("no_stream", isNonEmptyString(r.note) ? r.note : "No stream is available for this title right now.");
-  }
-  const sources = r.sources
-    .filter(
-      (s: any): s is Record<string, any> =>
-        typeof s === "object" && s !== null && isNonEmptyString(s.url) && isNonEmptyString(s.resolution),
-    )
-    .map((s: any) => ({
-      resolution: s.resolution,
-      format: isNonEmptyString(s.format) ? s.format : "MP4",
-      url: s.url,
-      sizeBytes: typeof s.size === "string" && /^\d+$/.test(s.size) ? Number(s.size) : null,
-      durationSeconds: typeof s.duration === "number" ? s.duration : null,
-      codec: isNonEmptyString(s.codec) ? s.codec : null,
-    }));
-  return {
-    subjectId: isNonEmptyString(r.subject_id) ? r.subject_id : subjectId,
-    se: typeof r.se === "number" ? r.se : se,
-    ep: typeof r.ep === "number" ? r.ep : ep,
-    sources,
-    hasResource: sources.length > 0,
-    note: isNonEmptyString(r.note) ? r.note : null,
-  };
+  const key = `${subjectId}|${se}|${ep}`;
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+  const pending = doResolveStreams(subjectId, detailPath, se, ep, signal).finally(() => inFlight.delete(key));
+  inFlight.set(key, pending);
+  return pending;
 }
 
 export async function fetchCaptions(

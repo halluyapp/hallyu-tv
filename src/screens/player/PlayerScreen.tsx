@@ -1,9 +1,9 @@
 import { Button } from "@/components/ui/Button";
-import { useGate } from "@/components/auth/GateProvider";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
-import { useAuth } from "@/hooks/useAuth";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchCaptions, resolveStreams } from "@/services/provider/adapter";
+import { classifyPlayerError, playerErrorMessage, PlayerErrorKind } from "@/services/player/classify";
+import { qualityOptions, selectableSources, selectSource } from "@/services/provider/streams";
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
 import { parseSrt, cueAt, Cue } from "@/services/subtitles/srt";
 import { useLibrary } from "@/state/LibraryContext";
@@ -47,29 +47,26 @@ function fmt(t: number): string {
   return (h > 0 ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(s).padStart(2, "0")}`;
 }
 
-type PlayerFailure =
-  | "loading"
-  | "source_invalid"
-  | "expired"
-  | "network"
-  | "decoder"
-  | "none";
+/** Bounded automatic recovery: never an endless retry loop. */
+const MAX_RECOVERY_ATTEMPTS = 3;
+/** A load that produces no frame for this long is a buffering timeout, not an endless spinner. */
+const BUFFER_STALL_TIMEOUT_MS = 30_000;
 
 export function PlayerScreen() {
   const route = useRoute<RouteProp<RootStackParamList, "Player">>();
   const navigation = useNavigation<Nav>();
   const { subjectId, detailPath, title, mediaType, season, episode, sources, resumeAt } = route.params;
-  const { user } = useAuth();
   const { saveProgress, progress } = useLibrary();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
 
   useKeepAwake();
 
-  const [source, setSource] = useState<StreamSource>(() => sources[Math.max(0, sources.length - 1)]!);
+  // Verified full-length sources only; previews are never listed or picked.
+  const qualityList = useMemo(() => qualityOptions(sources), [sources]);
+  const [source, setSource] = useState<StreamSource | null>(() => selectSource(sources, null));
   const [controlsVisible, setControlsVisible] = useState(true);
   const [status, setStatus] = useState<"loading" | "playing" | "error">("loading");
-  const [failure, setFailure] = useState<PlayerFailure>("none");
   const [failMessage, setFailMessage] = useState<string | null>(null);
   const [qualityPickerOpen, setQualityPickerOpen] = useState(false);
   const [subtitlePickerOpen, setSubtitlePickerOpen] = useState(false);
@@ -82,9 +79,15 @@ export function PlayerScreen() {
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [buffering, setBuffering] = useState(true);
+
   const controlsOpacity = useRef(new Animated.Value(1)).current;
   const lastSavedRef = useRef(0);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards: a late async response must never overwrite a newer user selection.
+  const requestSeqRef = useRef(0);
+  const sourceRef = useRef<StreamSource | null>(source);
+  sourceRef.current = source;
+  const recoveryRef = useRef({ attempts: 0, triedUrls: new Set<string>(), running: false });
 
   // Restore remote progress when the player mounts (cross-device resume).
   const remoteResume = useMemo(() => {
@@ -100,7 +103,7 @@ export function PlayerScreen() {
   const startAt = Math.max(resumeAt, remoteResume ?? 0, 0);
 
   const player = useVideoPlayer(
-    { uri: source.url, headers: PROVIDER_MEDIA_HEADERS },
+    source ? { uri: source.url, headers: PROVIDER_MEDIA_HEADERS } : null,
     (p) => {
       p.currentTime = startAt;
       p.play();
@@ -115,17 +118,94 @@ export function PlayerScreen() {
     setIsPlaying(playing.isPlaying);
   }, [playing]);
 
+  /** Swap in a new source while preserving the playback position. */
+  const applySource = useCallback(
+    (next: StreamSource, at: number, isRetry: boolean) => {
+      if (isRetry) requestSeqRef.current += 1;
+      const seq = requestSeqRef.current;
+      setSource(next);
+      setStatus("loading");
+      setBuffering(true);
+      setTimeout(() => {
+        if (seq !== requestSeqRef.current) return; // a newer selection superseded this one
+        player.replace({ uri: next.url, headers: PROVIDER_MEDIA_HEADERS });
+        player.currentTime = at;
+        player.play();
+      }, 0);
+    },
+    [player],
+  );
+
+  const showError = useCallback((kind: PlayerErrorKind, detail: string | null) => {
+    setStatus("error");
+    setFailMessage(detail ?? playerErrorMessage(kind));
+  }, []);
+
+  /**
+   * Bounded recovery on real failures: fresh resolve → same quality with a new
+   * signed URL → next verified full-length source. Position is preserved
+   * across every switch.
+   */
+  const recover = useCallback(
+    async (kind: PlayerErrorKind, detail: string | null) => {
+      const state = recoveryRef.current;
+      if (state.running) return;
+      if (state.attempts >= MAX_RECOVERY_ATTEMPTS || !sourceRef.current) {
+        showError(kind, detail);
+        return;
+      }
+      state.running = true;
+      state.attempts += 1;
+      const at = player.currentTime;
+      try {
+        const seq = ++requestSeqRef.current;
+        state.triedUrls.add(sourceRef.current.url);
+        const res = await resolveStreams(subjectId, detailPath, season, episode);
+        if (seq !== requestSeqRef.current) return; // user acted meanwhile
+        const candidates = selectableSources(res.sources).filter((s) => !state.triedUrls.has(s.url));
+        const sameQuality = candidates.find((s) => s.resolution === sourceRef.current?.resolution);
+        const next = sameQuality ?? candidates[0] ?? null;
+        if (!next) {
+          showError(kind, detail ?? playerErrorMessage(kind));
+          return;
+        }
+        state.running = false;
+        applySource(next, at, true);
+      } catch (err) {
+        if (err instanceof Error && err.message) {
+          const nested = classifyPlayerError(err.message);
+          showError(kind, playerErrorMessage(nested === "unknown" ? kind : nested));
+        } else {
+          showError(kind, detail);
+        }
+      } finally {
+        state.running = false;
+      }
+    },
+    [player, subjectId, detailPath, season, episode, applySource, showError],
+  );
+
+  // Real native errors from expo-video statusChange — classified, not assumed to be "decoder".
   useEffect(() => {
     setBuffering(statusChange.status === "loading");
     if (statusChange.status === "readyToPlay") {
       setStatus("playing");
-      setFailure("none");
-    } else if (statusChange.status === "error") {
-      setStatus("error");
-      setFailure("decoder");
-      setFailMessage("The video could not be decoded on this device.");
+      return;
     }
-  }, [statusChange]);
+    if (statusChange.status === "error") {
+      const kind = classifyPlayerError(statusChange.error?.message ?? "");
+      void recover(kind, null);
+    }
+  }, [statusChange, recover]);
+
+  // Buffering watchdog: no frame for 30s counts as a stall failure.
+  useEffect(() => {
+    if (!buffering || status === "error") return;
+    const t = setTimeout(() => {
+      if (sourceRef.current) void recover("buffering_timeout", null);
+    }, BUFFER_STALL_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [buffering, status, recover]);
 
   useEffect(() => {
     const t = timeUpdate?.currentTime ?? position;
@@ -135,7 +215,7 @@ export function PlayerScreen() {
     if (activeTrack) setCurrentCue(cueAt(cues, t * 1000, subtitleOffset * 1000));
 
     // Debounced progress persistence: every 10s of playback, plus near-completion.
-    if (user && t - lastSavedRef.current >= 10) {
+    if (t - lastSavedRef.current >= 10) {
       lastSavedRef.current = t;
       void saveProgress({
         subject_id: subjectId,
@@ -150,14 +230,14 @@ export function PlayerScreen() {
         completed: d > 0 && t / d > 0.95,
       });
     }
-  }, [timeUpdate, player, position, activeTrack, cues, subtitleOffset, user, subjectId, detailPath, mediaType, title, season, episode, saveProgress, route.params]);
+  }, [timeUpdate, player, position, activeTrack, cues, subtitleOffset, subjectId, detailPath, mediaType, title, season, episode, saveProgress, route.params]);
 
   // Save on unmount (leaving the player) and when completed.
   useEffect(() => {
     return () => {
       const t = player.currentTime;
       const d = player.duration;
-      if (user && t > 3) {
+      if (t > 3) {
         void saveProgress({
           subject_id: subjectId,
           detail_path: detailPath,
@@ -174,7 +254,7 @@ export function PlayerScreen() {
       void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [player, user]);
+  }, [player]);
 
   const loadCaptions = useCallback(async () => {
     if (tracks !== null) return tracks;
@@ -234,47 +314,42 @@ export function PlayerScreen() {
     [player, showControls],
   );
 
+  /** Explicit user quality choice: resets the recovery budget for the new selection. */
   const switchSource = useCallback(
     (next: StreamSource) => {
       setQualityPickerOpen(false);
-      const at = player.currentTime;
-      // Preserve playback position across quality switch.
-      setTimeout(() => {
-        player.replace({ uri: next.url, headers: PROVIDER_MEDIA_HEADERS });
-        player.currentTime = at;
-        player.play();
-      }, 0);
-      setSource(next);
+      recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
+      applySource(next, player.currentTime, true);
     },
-    [player],
+    [applySource, player],
   );
 
+  /** Manual retry: fresh links and a clean recovery budget. */
   const retry = useCallback(() => {
     setStatus("loading");
-    setFailure("none");
-    void resolveStreams(subjectId, detailPath, season, episode)
-      .then((res) => {
-        const fresh = res.sources.find((s) => s.resolution === source.resolution) ?? res.sources[0];
-        if (!fresh) {
-          setFailure("source_invalid");
-          setFailMessage(res.note ?? "No stream is available for this selection.");
-          setStatus("error");
-          return;
-        }
-        const at = player.currentTime;
-        player.replace({ uri: fresh.url, headers: PROVIDER_MEDIA_HEADERS });
-        player.currentTime = at;
-        player.play();
-        setSource(fresh);
-      })
-      .catch(() => {
-        setFailure("expired");
-        setFailMessage("The stream link expired and could not be refreshed.");
-        setStatus("error");
-      });
-  }, [subjectId, detailPath, season, episode, source, player]);
+    setFailMessage(null);
+    recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
+    if (source) {
+      applySource(source, player.currentTime, true);
+    } else {
+      void recover("expired", null);
+    }
+  }, [source, applySource, player, recover]);
 
   const landscape = width > height;
+  const active = source ?? selectSource(sources, null);
+
+  if (!active) {
+    return (
+      <View style={styles.root}>
+        <View style={styles.errorOverlay}>
+          <Text style={styles.errorTitle}>Nothing to play</Text>
+          <Text style={styles.errorMessage}>Only preview clips were returned for this title, and previews cannot be played here.</Text>
+          <Button label="Back" variant="quiet" onPress={() => navigation.goBack()} style={{ alignSelf: "stretch" }} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
@@ -368,18 +443,18 @@ export function PlayerScreen() {
             </Pressable>
             <Pressable style={styles.bottomBtn} onPress={() => setQualityPickerOpen(true)}>
               <Gauge size={16} color={palette.textPrimary} />
-              <Text style={styles.bottomLabel}>{source.resolution}</Text>
+              <Text style={styles.bottomLabel}>{active.resolution ?? "Auto"}</Text>
             </Pressable>
           </View>
         </Animated.View>
       ) : null}
 
-      {/* Quality picker */}
+      {/* Quality picker — verified full-length sources only, best-first. */}
       {qualityPickerOpen ? (
         <Sheet title="Quality" onClose={() => setQualityPickerOpen(false)}>
-          {sources.map((s) => (
-            <Pressable key={s.url} style={[styles.option, s.url === source.url && styles.optionActive]} onPress={() => switchSource(s)}>
-              <Text style={styles.optionTitle}>{s.resolution}</Text>
+          {selectableSources(sources).map((s) => (
+            <Pressable key={s.url} style={[styles.option, s.url === active.url && styles.optionActive]} onPress={() => switchSource(s)}>
+              <Text style={styles.optionTitle}>{s.resolution ?? "Auto"}</Text>
               <Text style={styles.optionMeta}>
                 {[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format].filter(Boolean).join(" · ")}
               </Text>

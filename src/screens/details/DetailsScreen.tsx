@@ -6,6 +6,7 @@ import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { useAuth } from "@/hooks/useAuth";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
+import { selectSource } from "@/services/provider/streams";
 import { downloadManager } from "@/services/downloads/manager";
 import { useLibrary } from "@/state/LibraryContext";
 import { ProviderError, SeasonInfo, TitleDetail } from "@/types/provider";
@@ -140,7 +141,8 @@ export function DetailsScreen() {
       setResolutionError(null);
       try {
         const res = await resolveStreams(detail.subjectId, detail.detailPath, selSeason ?? 0, selEpisode ?? 0);
-        const pick = res.sources[res.sources.length - 1] ?? null; // most data-efficient quality
+        // Mandatory default-quality rule: verified full-length 360p, else lowest full-length.
+        const pick = selectSource(res.sources, null);
         if (!pick) {
           setResolutionError("No downloadable source was returned for this selection.");
           return;

@@ -1,15 +1,18 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Provider integration verification — run in CI (backend-verify workflow) and
- * locally via `npm run verify:provider`. Exercises every public endpoint the
- * app depends on and fails loudly (exit 1) when the contract breaks.
+ * locally via `bun run verify:provider`. Exercises every public endpoint the
+ * app depends on and validates responses with the SAME normalization and
+ * selection rules the app ships (src/services/provider/streams.ts).
+ * Fails loudly (exit 1) when the contract breaks.
  *
- * Public API, no key required. This script never touches CDN media URLs
- * (they are IP-sensitive); it verifies metadata + stream descriptors only.
+ * Public API, no key required. This script never logs signed CDN URLs
+ * (tokens are stripped); it verifies metadata + stream descriptors only.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { normalizeStreamResponse, selectSource, qualityOptions } from "../src/services/provider/streams";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -21,18 +24,18 @@ for (const line of readFileSync(envPath, "utf8").split("\n")) {
 }
 
 const BASE = process.env.PROVIDER_BASE_URL ?? "https://movieapi.zarhosting.dpdns.org/api/public/v1";
-const UA =
-  "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36";
+// The single verified media-header configuration (matches src/services/provider/client.ts).
 const HEADERS = {
-  "User-Agent": UA,
+  "User-Agent":
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
   Referer: "https://www.moviebox.ph/",
   Origin: "https://www.moviebox.ph",
   Accept: "application/json",
 };
 
-// Fixtures verified during development. If these drift, pick replacements from /home results.
-const FIXTURE_SERIES = { subjectId: "4780148614284956296", slug: "dead-end-job-oAmYsY887H5" };
-const FIXTURE_MOVIE = { subjectId: "6202255725672398112", slug: "verity-eNHDBJtwKu4" };
+// Fixtures verified on 2026-11-03. If these drift, refresh from a live /home result — do not keep dead IDs.
+let FIXTURE_MOVIE = { subjectId: "3773468085374568272", slug: "verity-eNHDBJtwKu4", title: "Verity" };
+let FIXTURE_SERIES = { subjectId: "4780148614284956296", slug: "dead-end-job-oAmYsY887H5", title: "Dead-End Job" };
 
 let failures = 0;
 function check(name, ok, detail = "") {
@@ -47,12 +50,40 @@ async function getJson(path) {
   return res.json();
 }
 
+/** Strip signed-query tokens before any output: only hosts are ever printed. */
+function safeHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "(unparseable)";
+  }
+}
+
 async function main() {
   // 1. Home catalogue
   try {
     const home = await getJson("/home");
     const sections = Array.isArray(home) ? home : home?.data ?? home?.sections ?? [];
     check("GET /home", sections.length > 0, `${sections.length} sections`);
+
+    // Fixture self-heal: if a fixture id died, refresh from the live catalogue.
+    const wanted = (name) => {
+      for (const s of sections) {
+        for (const i of s.items ?? []) {
+          if ((i.name ?? "").startsWith(name)) return { subjectId: i.subject_id, slug: i.slug, title: i.name };
+        }
+      }
+      return null;
+    };
+    for (const [fixture, name] of [[FIXTURE_MOVIE, FIXTURE_MOVIE.title], [FIXTURE_SERIES, FIXTURE_SERIES.title]]) {
+      try {
+        const d = await getJson(`/detail/${fixture.slug}`);
+        if (!d?.data?.subject || d.data.subject.subjectId !== fixture.subjectId) throw new Error("drifted");
+      } catch {
+        const fresh = wanted(name);
+        if (fresh) Object.assign(fixture, fresh);
+      }
+    }
   } catch (err) {
     check("GET /home", false, String(err.message));
   }
@@ -79,21 +110,45 @@ async function main() {
     check("GET /detail/{slug}", false, String(err.message));
   }
 
-  // 4. Stream resolution (movie fixture: se=0&ep=0) — descriptors only.
+  // 4. Stream normalization with the app's own rules — movie (se=0&ep=0).
   try {
     const st = await getJson(
       `/stream/${FIXTURE_MOVIE.subjectId}?detail_path=${FIXTURE_MOVIE.slug}&se=0&ep=0`,
     );
-    const data = st?.data ?? st;
-    const sources = JSON.stringify(data).length > 2 ? data : null;
-    const blob = JSON.stringify(sources ?? {});
-    const hasUrls = blob.includes("http") && /mp4|m3u8/i.test(blob);
-    check("GET /stream/{id} (movie)", hasUrls, "stream descriptors present");
+    const n = normalizeStreamResponse(st);
+    const pick = selectSource(n.sources, null);
+    const hosts = new Set(n.sources.map((s) => safeHost(s.url)));
+    check(
+      "GET /stream/{id} (movie) normalized",
+      n.sources.length > 0 && n.sources.every((s) => s.url.startsWith("https://")),
+      `${n.sources.length} sources (${qualityOptions(n.sources).join("/")}); default=${pick?.resolution ?? "none"}; host=${[...hosts][0] ?? "?"}`,
+    );
+    check(
+      "movie default selection is full-length",
+      Boolean(pick) && pick.verifiedFullLength === true,
+      pick ? `${pick.resolution} · ${Math.round((pick.durationSeconds ?? 0) / 60)} min` : "no selection",
+    );
   } catch (err) {
-    check("GET /stream/{id} (movie)", false, String(err.message));
+    check("GET /stream/{id} (movie) normalized", false, String(err.message));
   }
 
-  // 5. Captions
+  // 5. Series episode — real season/episode params, and the selection must not be a preview.
+  try {
+    const st = await getJson(
+      `/stream/${FIXTURE_SERIES.subjectId}?detail_path=${FIXTURE_SERIES.slug}&se=1&ep=1`,
+    );
+    const n = normalizeStreamResponse(st);
+    const pick = selectSource(n.sources, null);
+    check(
+      "GET /stream/{id} (series S1E1) normalized",
+      n.sources.length > 0 && !pick?.preview && pick?.verifiedFullLength === true,
+      pick ? `${pick.resolution} · ${Math.round((pick.durationSeconds ?? 0) / 60)} min · not a preview` : "no selection",
+    );
+  } catch (err) {
+    check("GET /stream/{id} (series S1E1) normalized", false, String(err.message));
+  }
+
+  // 6. Captions
   try {
     const cap = await getJson(
       `/stream/${FIXTURE_MOVIE.subjectId}/captions?detail_path=${FIXTURE_MOVIE.slug}&se=0&ep=0`,

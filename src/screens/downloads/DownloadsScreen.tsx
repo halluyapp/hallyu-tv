@@ -98,12 +98,16 @@ export function DownloadsScreen() {
                 episode: job.episode,
                 resumeAt: 0,
                 sources: [{
-                  resolution: "Offline",
-                  format: "MP4",
                   url: absolutePathFor(job.finalPath),
+                  resolution: "Offline",
+                  qualityValue: null,
+                  format: "MP4",
+                  codec: job.source.codec,
                   sizeBytes: job.totalBytes,
                   durationSeconds: null,
-                  codec: job.source.codec,
+                  sourceLabel: "Offline",
+                  preview: false,
+                  verifiedFullLength: true,
                 }],
               })}>
                 <PlayIcon size={13} color={palette.success} />

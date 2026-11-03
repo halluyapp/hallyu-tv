@@ -29,6 +29,9 @@ jobs:
       - name: Restore public env config
         run: cp .env.example .env
 
+      - name: Unit tests (normalization, selection, subtitles)
+        run: bun test
+
       - name: Typecheck
         run: bunx tsc --noEmit
 

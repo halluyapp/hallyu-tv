@@ -21,12 +21,17 @@ jobs:
         with:
           node-version: 20
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       # .env is not tracked; scripts fall back to the committed public .env.example
       - name: Restore public env config
         run: cp .env.example .env
 
-      - name: Verify provider API contract
-        run: node scripts/verify-provider.mjs
+      # bun runs the script AND the app's own TS normalization module it imports.
+      - name: Verify provider API contract (app normalization rules)
+        run: bun scripts/verify-provider.mjs
 
       - name: Verify Supabase control plane
         run: node scripts/verify-backend.mjs

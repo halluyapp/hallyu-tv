@@ -50,20 +50,19 @@ export interface TitleDetail {
   cast: StarInfo[];
 }
 
-export interface StreamSource {
-  resolution: string;
-  format: string;
-  url: string;
-  sizeBytes: number | null;
-  durationSeconds: number | null;
-  codec: string | null;
-}
+/**
+ * A normalized, validated playback source. The shared normalization rules live
+ * in services/provider/streams.ts — this type is a re-export so every consumer
+ * (player, downloads, verification script, tests) shares one definition.
+ */
+export type { NormalizedSource as StreamSource } from "../services/provider/streams";
+import type { NormalizedSource } from "../services/provider/streams";
 
 export interface StreamResolution {
   subjectId: string;
   se: number;
   ep: number;
-  sources: StreamSource[];
+  sources: NormalizedSource[];
   hasResource: boolean;
   note: string | null;
 }

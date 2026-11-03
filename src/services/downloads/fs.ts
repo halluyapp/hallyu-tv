@@ -1,5 +1,6 @@
 import { LegacyFileSystem as FS, AsyncStorage } from "./native";
 import { DOWNLOADS_DIR, absolutePath } from "./paths";
+import { PROVIDER_MEDIA_HEADERS } from "../provider/client";
 import type { DownloadResumable } from "expo-file-system/legacy";
 import type { DownloadJob } from "./types";
 
@@ -200,11 +201,6 @@ function decodeBase64Bytes(b64: string): Uint8Array {
 }
 
 function jobHeaders(_job: DownloadJob): Record<string, string> {
-  // Provider media headers. The CDN checks Origin/Referer in addition to UA.
-  return {
-    Origin: "https://www.moviebox.ph/",
-    Referer: "https://www.moviebox.ph/",
-    "User-Agent":
-      "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
-  };
+  // The single verified media-header configuration, shared with playback.
+  return { ...PROVIDER_MEDIA_HEADERS };
 }
