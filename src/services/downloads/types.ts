@@ -25,6 +25,9 @@ export interface DownloadRequest {
   expectedBytes: number | null;
 }
 
+/** "native" = system DownloadManager (background-safe, no pause); "js" = in-app transfer. */
+export type DownloadEngine = "native" | "js";
+
 export interface DownloadJob extends DownloadRequest {
   id: string;
   state: DownloadState;
@@ -34,4 +37,8 @@ export interface DownloadJob extends DownloadRequest {
   partPath: string;
   finalPath: string;
   failureReason: string | null;
+  /** Which engine owns the bytes. Persisted so restarts reconcile correctly. */
+  engine: DownloadEngine;
+  /** Native engine only: absolute file path reported by the system on success. */
+  nativeKey?: string;
 }

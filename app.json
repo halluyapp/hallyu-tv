@@ -44,7 +44,8 @@
         {
           "cameraPermission": "Hallyu TV uses the camera only to scan TV pairing QR codes."
         }
-      ]
+      ],
+      "./plugins/withHallyuDownloader"
     ]
   }
 }

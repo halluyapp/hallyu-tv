@@ -1,5 +1,8 @@
 import { resolveStreams } from "@/services/provider/adapter";
+import { selectSource } from "@/services/provider/streams";
 import { LegacyFileSystem, DOWNLOADS_DIR } from "./fs";
+import { isNativeDownloaderAvailable, nativeDownloader } from "./nativeDownloader";
+import { downloadKey, reasonMessage, sizeWithinTolerance, DM_REASON, DM_STATUS } from "./reasons";
 import { jobPaths } from "./paths";
 import type { DownloadJob, DownloadState, DownloadRequest } from "./types";
 
@@ -7,14 +10,17 @@ export { DOWNLOADS_DIR };
 
 /**
  * Download state machine. Persisted to AsyncStorage so jobs recover across app
- * restarts. Bytes flow through expo-file-system download tasks to a `.part`
- * file, validated and atomically renamed on completion.
+ * restarts. Two engines:
  *
- * Honest limitation: expo-file-system transfers continue while the app is
- * backgrounded only for as long as the OS lets the JS task run; OS-level
- * background resumption with notifications requires a native transfer service.
- * This is documented in docs/downloads/design.md. Resume uses Range only when
- * the CDN advertises support (Accept-Ranges), see docs.
+ *  - native (Android): the system DownloadManager owns the transfer. It keeps
+ *    running while the app is backgrounded or closed, retries on connectivity
+ *    changes, and shows a system notification. Progress arrives by polling;
+ *    on restart, polling reconciles registry entries with system state.
+ *    DownloadManager cannot pause, so native jobs do not offer pause.
+ *  - js (fallback, e.g. other platforms): expo-file-system transfer to a
+ *    `.part` file, validated and atomically renamed on completion. Honest
+ *    limitation: continues in the background only as long as the OS lets the
+ *    JS task run. See docs/downloads-design.md.
  */
 
 const REGISTRY_KEY = "download_jobs_v1";
@@ -27,6 +33,7 @@ type Listener = (jobs: DownloadJob[]) => void;
 class DownloadManager {
   private jobs = new Map<string, DownloadJob>();
   private tasks = new Map<string, ReturnType<typeof LegacyFileSystem.createDownloadTask>>();
+  private polls = new Map<string, ReturnType<typeof setTimeout>>();
   private listeners = new Set<Listener>();
   private hydrated = false;
 
@@ -37,8 +44,16 @@ class DownloadManager {
       const raw = await LegacyFileSystem.readRegistry();
       if (Array.isArray(raw)) {
         for (const j of raw as DownloadJob[]) {
-          // Anything that was mid-flight when the app died becomes failed and retryable.
-          if (j.state === "downloading" || j.state === "connecting" || j.state === "resolving" || j.state === "queued" || j.state === "verifying") {
+          if (j.engine === "native") {
+            // System DownloadManager jobs may still be alive (or finished while
+            // the app was closed) — reconcile with the system, don't guess.
+            if (j.state !== "completed" && j.state !== "failed" && j.state !== "cancelled") {
+              this.pollNative(j.id, 0);
+            }
+          } else if (
+            j.state === "downloading" || j.state === "connecting" || j.state === "resolving" || j.state === "queued" || j.state === "verifying"
+          ) {
+            // Anything JS-mid-flight when the app died becomes failed and retryable.
             j.state = "failed";
             j.failureReason = "Interrupted by app restart";
           }
@@ -93,7 +108,11 @@ class DownloadManager {
     );
     if (existing) return;
 
-    const id = `${request.subjectId}_${request.season}_${request.episode}_${Date.now()}`;
+    const useNative = isNativeDownloaderAvailable();
+    // Native engine keys are stable, so a retry replaces the old system job.
+    const id = useNative
+      ? downloadKey(request.subjectId, request.season, request.episode)
+      : `${request.subjectId}_${request.season}_${request.episode}_${Date.now()}`;
     const paths = jobPaths(request.title, request.season, request.episode);
     const job: DownloadJob = {
       id,
@@ -105,6 +124,8 @@ class DownloadManager {
       partPath: paths.partPath,
       finalPath: paths.finalPath,
       failureReason: null,
+      engine: useNative ? "native" : "js",
+      nativeKey: useNative ? id : undefined,
     };
     this.jobs.set(id, job);
     this.emit();
@@ -123,6 +144,118 @@ class DownloadManager {
   }
 
   private async start(job: DownloadJob): Promise<void> {
+    if (job.engine === "native") {
+      this.startNative(job);
+    } else {
+      await this.startJs(job);
+    }
+  }
+
+  /**
+   * Native engine: hand the bytes to the system DownloadManager, then poll.
+   * The system keeps transferring while the app is backgrounded or closed;
+   * polling resumes/reconciles whenever the app opens again.
+   */
+  private startNative(job: DownloadJob): void {
+    this.transition(job.id, "connecting");
+    nativeDownloader
+      .start(job.nativeKey ?? job.id, job.source.url, job.title)
+      .then(() => {
+        // A system job may already be done when reconciling; a single query
+        // call settles it either way.
+        this.pollNative(job.id, 0);
+      })
+      .catch((err: unknown) => {
+        this.update(job.id, {
+          state: "failed",
+          failureReason: err instanceof Error ? err.message : "Download could not start",
+        });
+      });
+  }
+
+  private static POLL_MS = 1000;
+  private static MAX_QUERIES_WITHOUT_PROGRESS = 30;
+
+  private pollNative(id: string, stalledQueries: number): void {
+    const existing = this.polls.get(id);
+    if (existing) clearTimeout(existing);
+    const job = this.jobs.get(id);
+    if (!job || job.engine !== "native") return;
+    if (job.state === "completed" || job.state === "cancelled") return;
+
+    void nativeDownloader.query(job.nativeKey ?? job.id).then((snap) => {
+      const current = this.jobs.get(id);
+      if (!current || !snap) return;
+      if (current.state === "completed" || current.state === "cancelled") return;
+
+      if (snap.status === "missing") {
+        // System lost the job before it ever ran (e.g. cleared by the OS).
+        this.update(id, { state: "failed", failureReason: "The system download is no longer tracked. Tap retry." });
+        return;
+      }
+
+      if (snap.status === "successful") {
+        this.finishNative(id, snap);
+        return;
+      }
+
+      if (snap.status === "failed") {
+        this.update(id, { state: "failed", failureReason: reasonMessage(DM_STATUS.FAILED, snap.reason) });
+        void this.pump();
+        return;
+      }
+
+      let nextStalled = 0;
+      if (snap.status === "paused" && snap.reason !== DM_REASON.WAITING_TO_RETRY) {
+        // System-level pause (network loss etc.) — not user-pausable.
+        this.update(id, {
+          state: "waiting_for_network",
+          failureReason: reasonMessage(DM_STATUS.PAUSED, snap.reason),
+        });
+      } else {
+        nextStalled = snap.bytes > current.receivedBytes ? 0 : stalledQueries + 1;
+        if (nextStalled > DownloadManager.MAX_QUERIES_WITHOUT_PROGRESS) {
+          this.update(id, { state: "failed", failureReason: "The download stopped making progress. Tap retry." });
+          void this.pump();
+          return;
+        }
+        this.update(id, {
+          state: "downloading",
+          receivedBytes: snap.bytes,
+          totalBytes: snap.total > 0 ? snap.total : current.expectedBytes,
+        });
+      }
+
+      // Keep polling while the app is open; background polling simply stops
+      // (JS suspends) and hydrate() reconciles when the app returns.
+      const timer = setTimeout(() => this.pollNative(id, nextStalled), DownloadManager.POLL_MS);
+      this.polls.set(id, timer);
+    });
+  }
+
+  /** Verify a successful native transfer before promoting it. */
+  private finishNative(id: string, snap: { total: number; localPath?: string }): void {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    const total = snap.total > 0 ? snap.total : (job.expectedBytes ?? 0);
+    if (!sizeWithinTolerance(total, job.expectedBytes)) {
+      void nativeDownloader.remove(job.nativeKey ?? job.id);
+      this.update(id, { state: "failed", failureReason: "The downloaded file failed verification. Tap retry." });
+      void this.pump();
+      return;
+    }
+    const localPath = snap.localPath ?? "";
+    this.update(id, {
+      state: "completed",
+      finalPath: localPath || job.finalPath,
+      receivedBytes: total,
+      totalBytes: total,
+    });
+    void this.pump();
+  }
+
+  /** JS engine: expo-file-system transfer to a .part file, verified on completion. */
+  private async startJs(job: DownloadJob): Promise<void> {
     this.transition(job.id, "connecting");
     try {
       await LegacyFileSystem.ensureDir();
@@ -180,62 +313,99 @@ class DownloadManager {
 
   pause(id: string) {
     const job = this.jobs.get(id);
-    if (!job || job.state !== "downloading") return;
+    if (!job || job.engine === "native") return; // DownloadManager cannot pause
+    if (job.state !== "downloading") return;
     this.tasks.get(id)?.pause();
     this.update(id, { state: "paused" });
   }
 
+  /**
+   * Resume/retry. Signed URLs expire quickly, so failures always re-resolve a
+   * fresh source — same quality when the provider still offers it, else the
+   * same default rule playback uses. A paused JS job whose task no longer
+   * exists (app restart) goes through the same re-enqueue path.
+   */
   resume(id: string) {
     const job = this.jobs.get(id);
     if (!job) return;
-    if (job.state === "paused") {
+
+    if (job.engine === "native") {
+      if (job.state === "waiting_for_network" || job.state === "paused") {
+        // The system pauses/resumes on its own; just resume polling.
+        this.pollNative(id, 0);
+      } else if (job.state === "failed" || job.state === "cancelled") {
+        void this.restartWithFreshSource(job);
+      }
+      return;
+    }
+
+    if (job.state === "paused" && this.tasks.has(id)) {
       this.update(id, { state: "downloading" });
       this.tasks.get(id)?.resume();
-    } else if (job.state === "failed" || job.state === "cancelled") {
-      // Signed URLs expire quickly — re-resolve a fresh source, falling back to
-      // the same quality when the provider still offers it.
-      void (async () => {
-        try {
-          const res = await resolveStreams(
-            job.subjectId,
-            job.detailPath,
-            job.season,
-            job.episode,
-          );
-          if (res.sources.length === 0) throw new Error(res.note ?? "No downloadable source was returned.");
-          const fresh =
-            res.sources.find((s) => s.resolution === job.source.resolution) ??
-            res.sources[res.sources.length - 1] ??
-            job.source;
-          this.jobs.delete(id);
-          this.emit();
-          await this.enqueue({
-            subjectId: job.subjectId,
-            detailPath: job.detailPath,
-            season: job.season,
-            episode: job.episode,
-            title: job.title,
-            posterUrl: job.posterUrl,
-            mediaType: job.mediaType,
-            source: fresh,
-            expectedBytes: fresh.sizeBytes,
-          });
-        } catch (err) {
-          this.update(id, {
-            state: "failed",
-            failureReason: err instanceof Error ? err.message : "Could not refresh the download source",
-          });
-        }
-      })();
+    } else if (job.state === "paused" || job.state === "failed" || job.state === "cancelled") {
+      void this.restartWithFreshSource(job);
     }
+  }
+
+  /** Re-resolve a fresh URL and start the job again with its engine. */
+  private async restartWithFreshSource(job: DownloadJob): Promise<void> {
+    const id = job.id;
+    this.update(id, { state: "resolving", failureReason: null });
+    try {
+      const res = await resolveStreams(job.subjectId, job.detailPath, job.season, job.episode);
+      if (res.sources.length === 0) throw new Error(res.note ?? "No downloadable source was returned.");
+      // Same requested quality first, then the app's default (data-conscious) rule.
+      const fresh = selectSource(res.sources, job.source.resolution) ?? selectSource(res.sources, null);
+      if (!fresh) throw new Error("No downloadable source was returned.");
+
+      const paths = jobPaths(job.title, job.season, job.episode);
+      const next: DownloadJob = {
+        ...job,
+        source: fresh,
+        expectedBytes: fresh.sizeBytes ?? null,
+        state: "queued",
+        receivedBytes: 0,
+        totalBytes: fresh.sizeBytes ?? null,
+        partPath: paths.partPath,
+        finalPath: job.engine === "native" ? job.finalPath : paths.finalPath,
+        failureReason: null,
+      };
+      this.jobs.set(id, next);
+      this.emit();
+      if (next.engine === "native") {
+        this.startNative(next);
+      } else {
+        void this.pump();
+      }
+    } catch (err) {
+      this.update(id, {
+        state: "failed",
+        failureReason: err instanceof Error ? err.message : "Could not refresh the download source",
+      });
+    }
+  }
+
+  private stopEngine(id: string): void {
+    this.tasks.get(id)?.cancel();
+    this.tasks.delete(id);
+    const timer = this.polls.get(id);
+    if (timer) clearTimeout(timer);
+    this.polls.delete(id);
   }
 
   cancel(id: string) {
     const job = this.jobs.get(id);
     if (!job) return;
-    this.tasks.get(id)?.cancel();
-    this.tasks.delete(id);
-    void LegacyFileSystem.deleteFile(job.partPath);
+    if (job.engine === "native") {
+      void nativeDownloader.remove(job.nativeKey ?? job.id);
+    } else {
+      this.tasks.get(id)?.cancel();
+      this.tasks.delete(id);
+      void LegacyFileSystem.deleteFile(job.partPath);
+    }
+    const timer = this.polls.get(id);
+    if (timer) clearTimeout(timer);
+    this.polls.delete(id);
     this.jobs.delete(id);
     this.emit();
     void this.pump();
@@ -245,8 +415,10 @@ class DownloadManager {
   async delete(id: string): Promise<void> {
     const job = this.jobs.get(id);
     if (!job) return;
-    this.tasks.get(id)?.cancel();
-    this.tasks.delete(id);
+    if (job.engine === "native") {
+      void nativeDownloader.remove(job.nativeKey ?? job.id);
+    }
+    this.stopEngine(id);
     await Promise.all([LegacyFileSystem.deleteFile(job.finalPath), LegacyFileSystem.deleteFile(job.partPath)]);
     this.jobs.delete(id);
     this.emit();

@@ -98,7 +98,9 @@ export function DownloadsScreen() {
                 episode: job.episode,
                 resumeAt: 0,
                 sources: [{
-                  url: absolutePathFor(job.finalPath),
+                  // Native-engine files live outside the JS document dir and
+                  // are stored as absolute paths; they still need file:// here.
+                  url: job.engine === "native" ? `file://${job.finalPath}` : absolutePathFor(job.finalPath),
                   resolution: "Offline",
                   qualityValue: null,
                   format: "MP4",
@@ -114,7 +116,7 @@ export function DownloadsScreen() {
                 <Text style={[styles.chipLabel, { color: palette.success }]}>Play offline</Text>
               </Pressable>
             ) : null}
-            {job.state === "downloading" ? (
+            {job.state === "downloading" && job.engine !== "native" ? (
               <Pressable style={styles.chipAction} onPress={() => downloadManager.pause(job.id)}>
                 <Pause size={13} color={palette.warning} />
                 <Text style={[styles.chipLabel, { color: palette.warning }]}>Pause</Text>
