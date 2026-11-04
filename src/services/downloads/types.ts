@@ -40,4 +40,6 @@ export interface DownloadJob extends DownloadRequest {
   nativeKey?: string;
   /** Fresh-source retries already attempted. */
   freshRetries?: number;
+  /** Queue priority; lower runs first. Absent = normal (FIFO by createdAt). */
+  priority?: number;
 }

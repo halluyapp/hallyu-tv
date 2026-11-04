@@ -1,4 +1,6 @@
 import { PosterCard } from "@/components/ui/PosterCard";
+import { AmbientGlow } from "@/components/ui/AmbientGlow";
+import { Poster, initialsFor } from "@/components/ui/Poster";
 import { EmptyState, ErrorState, SkeletonRail } from "@/components/ui/States";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { useSound } from "@/services/sound/SoundContext";
@@ -11,7 +13,6 @@ import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FlatList,
-  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -36,9 +37,8 @@ function Hero({ item, onPress, resume }: { item: CatalogueItem; onPress: () => v
   }, [play, onPress]);
   return (
     <Pressable onPress={open} style={styles.hero}>
-      {item.posterUrl ? (
-        <Image source={{ uri: item.posterUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-      ) : null}
+      <Poster uri={item.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(item.name)} />
+      <AmbientGlow />
       <LinearGradient
         colors={["rgba(8,10,13,0.10)", "rgba(8,10,13,0.45)", "rgba(8,10,13,0.96)"]}
         locations={[0.3, 0.6, 1]}
@@ -79,11 +79,7 @@ function ContinueWatchingRail({ onOpen }: { onOpen: (p: ProgressRow) => void }) 
         keyExtractor={(p) => `${p.subject_id}_${p.season_number}_${p.episode_number}`}
         renderItem={({ item }) => (
           <Pressable style={styles.resumeCard} onPress={() => onOpen(item)}>
-            {item.poster_url ? (
-              <Image source={{ uri: item.poster_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-            ) : (
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.surfaceRaised }]} />
-            )}
+            <Poster uri={item.poster_url} style={StyleSheet.absoluteFill} initials={initialsFor(item.title)} />
             <View style={styles.resumeScrim} />
             <View style={styles.resumePlay}>
               <Play size={13} color={palette.textPrimary} fill={palette.textPrimary} />
@@ -205,7 +201,10 @@ export function HomeScreen() {
                 contentContainerStyle={{ paddingHorizontal: spacing.xl }}
                 data={rail.items}
                 keyExtractor={(i) => `${rail.section}_${i.subjectId}`}
-                getItemLayout={undefined}
+                windowSize={5}
+                initialNumToRender={8}
+                maxToRenderPerBatch={12}
+                removeClippedSubviews
                 renderItem={({ item }) => <PosterCard item={item} onPress={() => openDetails(item)} />}
               />
             </View>

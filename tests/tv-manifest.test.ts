@@ -55,7 +55,12 @@ describe("Android TV manifest support", () => {
 
   test("app config registers the TV and downloader plugins only", () => {
     const appJson = JSON.parse(readFileSync(join(import.meta.dir, "..", "app.json"), "utf8"));
-    expect(appJson.expo.plugins).toEqual(["expo-video", "./plugins/withHallyuDownloader", "./plugins/withAndroidTvSupport"]);
+    // Plugin identity is the contract: exactly these three, in order. The
+    // expo-video entry may carry config props (PiP / background playback).
+    const names = appJson.expo.plugins.map((p: string | [string, unknown]) => (Array.isArray(p) ? p[0] : p));
+    expect(names).toEqual(["expo-video", "./plugins/withHallyuDownloader", "./plugins/withAndroidTvSupport"]);
+    const videoEntry = appJson.expo.plugins.find((p: unknown) => Array.isArray(p));
+    expect(videoEntry?.[1]?.supportsPictureInPicture).toBe(true);
     expect(appJson.expo.android.permissions).not.toContain("android.permission.CAMERA");
   });
 });

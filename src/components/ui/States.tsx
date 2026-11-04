@@ -1,12 +1,44 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
-import React from "react";
-import { StyleSheet, Text, View, ViewStyle, StyleProp } from "react-native";
+import { canAffordAmbience } from "@/hooks/useDeviceTier";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
+import React, { useEffect, useRef } from "react";
+import { Animated, Easing, StyleSheet, Text, View, ViewStyle, StyleProp } from "react-native";
 import { CloudOff, RefreshCw } from "lucide-react-native";
 import { Button } from "./Button";
 
-/** Skeleton shimmer block for catalogue loading. */
+/** Skeleton shimmer block for catalogue loading. Static when motion is reduced. */
 export function Skeleton({ width, height, style }: { width: number | `${number}%`; height: number; style?: StyleProp<ViewStyle> }) {
-  return <View style={[{ width, height, borderRadius: radius.md, backgroundColor: palette.surfaceRaised }, style]} />;
+  const reduced = useReducedMotion();
+  const afford = canAffordAmbience();
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (reduced || !afford) return;
+    const loop = Animated.loop(
+      Animated.timing(shimmer, { toValue: 1, duration: 1400, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [reduced, afford, shimmer]);
+
+  const translateX = shimmer.interpolate({ inputRange: [0, 1], outputRange: [-1, 1] });
+
+  return (
+    <View style={[{ width, height, borderRadius: radius.md, backgroundColor: palette.surfaceRaised, overflow: "hidden" }, style]}>
+      {!reduced && afford ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: "rgba(225,235,245,0.06)",
+              transform: [{ translateX: Animated.multiply(translateX, width === "100%" ? 300 : (typeof width === "number" ? width : 300)) }],
+            },
+          ]}
+        />
+      ) : null}
+    </View>
+  );
 }
 
 export function SkeletonRail({ itemWidth = 110, count = 4 }: { itemWidth?: number; count?: number }) {

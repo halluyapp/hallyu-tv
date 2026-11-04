@@ -30,6 +30,7 @@ class DownloadManager {
   private hydratePromise: Promise<void> | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
   private pumping = false;
+  private priorityFloor = 0;
 
   hydrate(): Promise<void> {
     if (!this.hydratePromise) {
@@ -133,7 +134,9 @@ class DownloadManager {
       while (true) {
         const active = Array.from(this.jobs.values()).filter((j) => ACTIVE_STATES.includes(j.state) && j.state !== "queued").length;
         if (active >= MAX_CONCURRENT_DOWNLOADS) break;
-        const next = Array.from(this.jobs.values()).find((j) => j.state === "queued");
+        const next = Array.from(this.jobs.values())
+          .filter((j) => j.state === "queued")
+          .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0) || a.createdAt - b.createdAt)[0];
         if (!next) break;
         // Mark connecting synchronously so the next loop iteration counts it.
         this.transition(next.id, "connecting");
@@ -386,6 +389,15 @@ class DownloadManager {
       });
       void this.pump();
     }
+  }
+
+  /** Jump a queued job to the front of the queue ("download next"). */
+  moveToFront(id: string): void {
+    const job = this.jobs.get(id);
+    if (!job || job.state !== "queued") return;
+    this.priorityFloor -= 1;
+    this.update(id, { priority: this.priorityFloor });
+    void this.pump();
   }
 
   private stopEngine(id: string): void {

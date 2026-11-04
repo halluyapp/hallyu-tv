@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/States";
+import { Poster, initialsFor } from "@/components/ui/Poster";
 import { SkeletonFill } from "@/components/ui/PosterCard";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
@@ -9,15 +10,25 @@ import { downloadManager } from "@/services/downloads/manager";
 import { useLibrary } from "@/state/LibraryContext";
 import { useSound } from "@/services/sound/SoundContext";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Speech from "expo-speech";
 import { ProviderError, SeasonInfo, TitleDetail } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight } from "lucide-react-native";
+import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight, Volume2, VolumeX } from "lucide-react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+/** The following episode within the season, else episode 1 of the next season. */
+function nextEpisodeFor(detail: TitleDetail, season: number, episode: number): { season: number; episode: number } | null {
+  if (detail.mediaType !== "series") return null;
+  const current = detail.seasons.find((s) => s.season === season);
+  if (current && episode < current.maxEp) return { season, episode: episode + 1 };
+  const later = detail.seasons.filter((s) => s.season > season).sort((a, b) => a.season - b.season)[0];
+  return later ? { season: later.season, episode: 1 } : null;
+}
 
 export function DetailsScreen() {
   const route = useRoute<RouteProp<RootStackParamList, "Details">>();
@@ -34,6 +45,7 @@ export function DetailsScreen() {
   const [episode, setEpisode] = useState(1);
   const [resolving, setResolving] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const [speaking, setSpeaking] = useState(false);
   const initializedRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -98,6 +110,7 @@ export function DetailsScreen() {
           episode: selEpisode ?? 0,
           resumeAt: opts.resumeAt,
           sources: res.sources,
+          nextEpisode: nextEpisodeFor(detail, selSeason ?? 0, selEpisode ?? 0),
         });
       } catch (err) {
         playTone("error");
@@ -158,6 +171,27 @@ export function DetailsScreen() {
     });
   }, [detail, toggleWatchlist, saved, playTone]);
 
+  // Spoken synopsis — on-device TTS (expo-speech); leaving the screen stops it.
+  const toggleSpeaking = useCallback(() => {
+    if (speaking) {
+      Speech.stop();
+      setSpeaking(false);
+      playTone("tap");
+      return;
+    }
+    if (!detail?.description) return;
+    Speech.speak(detail.description, { rate: 1.0, pitch: 1.0, onDone: () => setSpeaking(false), onStopped: () => setSpeaking(false), onError: () => setSpeaking(false) });
+    setSpeaking(true);
+    playTone("confirm");
+  }, [speaking, detail, playTone]);
+
+  useEffect(
+    () => () => {
+      void Speech.stop();
+    },
+    [],
+  );
+
   if (error) {
     return (
       <View style={styles.root}>
@@ -174,7 +208,7 @@ export function DetailsScreen() {
     <ScrollView style={styles.root} contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xxl }}>
       <View style={styles.heroWrap}>
         {detail.backdropUrl ?? detail.posterUrl ? (
-          <Image source={{ uri: detail.backdropUrl ?? detail.posterUrl ?? "" }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          <Poster uri={detail.backdropUrl ?? detail.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(detail.title)} />
         ) : null}
         <LinearGradient
           colors={["rgba(8,10,13,0.28)", "rgba(8,10,13,0.62)", "rgba(8,10,13,1)"]}
@@ -229,6 +263,13 @@ export function DetailsScreen() {
           <Text numberOfLines={expanded ? undefined : 3} style={styles.synopsis}>{synopsis}</Text>
           <Text style={styles.expandHint}>{expanded ? "Show less" : "More"}</Text>
         </Pressable>
+
+        {detail.description ? (
+          <Pressable style={styles.listenBtn} onPress={toggleSpeaking} accessibilityRole="button" accessibilityLabel={speaking ? "Stop reading the synopsis" : "Read the synopsis aloud"}>
+            {speaking ? <VolumeX size={15} color={palette.accent} /> : <Volume2 size={15} color={palette.textSecondary} />}
+            <Text style={[styles.listenLabel, speaking && { color: palette.accent }]}>{speaking ? "Stop reading" : "Listen"}</Text>
+          </Pressable>
+        ) : null}
 
         {detail.mediaType === "series" && detail.seasons.length > 0 ? (
           <View style={{ marginTop: spacing.xl }}>
@@ -287,11 +328,7 @@ export function DetailsScreen() {
             <View style={styles.castRow}>
               {detail.cast.slice(0, 6).map((s) => (
                 <View key={s.name} style={styles.castItem}>
-                  {s.avatarUrl ? (
-                    <Image source={{ uri: s.avatarUrl }} style={styles.castAvatar} />
-                  ) : (
-                    <View style={[styles.castAvatar, { backgroundColor: palette.surfaceRaised }]} />
-                  )}
+                  <Poster uri={s.avatarUrl} style={styles.castAvatar} initials={initialsFor(s.name)} />
                   <Text numberOfLines={1} style={styles.castName}>{s.name}</Text>
                   {s.character ? <Text numberOfLines={1} style={styles.castRole}>{s.character}</Text> : null}
                 </View>
@@ -349,6 +386,20 @@ const styles = StyleSheet.create({
   chipText: { color: palette.textSecondary, fontSize: 12, fontWeight: "600" },
   synopsis: { ...typeScale.body, color: palette.textPrimary, lineHeight: 23, marginTop: spacing.lg },
   expandHint: { color: palette.accent, fontSize: 13, fontWeight: "700", marginTop: spacing.xs },
+  listenBtn: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: palette.glassFill,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    marginTop: spacing.md,
+  },
+  listenLabel: { color: palette.textSecondary, fontSize: 12, fontWeight: "700" },
   sectionTitle: { ...typeScale.headline, color: palette.textPrimary, marginBottom: spacing.md },
   seasonChip: {
     backgroundColor: palette.glassFill,

@@ -8,6 +8,7 @@ import {
   Play,
   RotateCcw,
   RotateCw,
+  SkipForward,
   Subtitles,
   Wifi,
 } from "lucide-react-native";
@@ -37,6 +38,8 @@ export interface PlayerControlsProps {
   isPlaying: boolean;
   quality: string | null;
   subtitleLabel: string | null;
+  rate: number;
+  hasNextEpisode: boolean;
   isTV: boolean;
   onTogglePlay: () => void;
   onSkip: (seconds: number) => void;
@@ -44,6 +47,8 @@ export interface PlayerControlsProps {
   onBack: () => void;
   onQuality: () => void;
   onSubtitles: () => void;
+  onSpeed: () => void;
+  onNextEpisode: () => void;
 }
 
 export function PlayerControls(props: PlayerControlsProps) {
@@ -179,6 +184,16 @@ export function PlayerControls(props: PlayerControlsProps) {
         </View>
         <View style={styles.actionsRow}>
           <Pressable
+            onPress={props.onSpeed}
+            onFocus={() => setFocused("speed")}
+            onBlur={() => setFocused(null)}
+            style={[styles.pill, focusStyle("speed")]}
+          >
+            <Text style={[styles.pillText, props.rate !== 1 && { color: palette.accent }]}>
+              {props.rate === 1 ? "1×" : `${props.rate}×`}
+            </Text>
+          </Pressable>
+          <Pressable
             onPress={props.onSubtitles}
             onFocus={() => setFocused("subs")}
             onBlur={() => setFocused(null)}
@@ -198,6 +213,17 @@ export function PlayerControls(props: PlayerControlsProps) {
             <Gauge size={14} color={palette.textSecondary} />
             <Text style={styles.pillText}>{props.quality ?? "Auto"}</Text>
           </Pressable>
+          {props.hasNextEpisode ? (
+            <Pressable
+              onPress={props.onNextEpisode}
+              onFocus={() => setFocused("next")}
+              onBlur={() => setFocused(null)}
+              style={[styles.pill, focusStyle("next")]}
+            >
+              <SkipForward size={14} color={palette.accent} />
+              <Text style={[styles.pillText, { color: palette.accent }]}>Next episode</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
     </View>

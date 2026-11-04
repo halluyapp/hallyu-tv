@@ -5,7 +5,7 @@ import { fetchCaptions, fetchCaptionText, resolveStreams } from "@/services/prov
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
 import { classifyPlayerError, playerErrorMessage, PlayerErrorKind } from "@/services/player/classify";
 import { PlayerControls } from "./PlayerControls";
-import { PickerSheet, QualityOptions, SubtitleOptions } from "./PickerSheets";
+import { NativeTracksOptions, PickerSheet, QualityOptions, SpeedOptions, SubtitleOptions } from "./PickerSheets";
 import { pickRecoverySource, qualityOptions, selectableSources, selectSource } from "@/services/provider/streams";
 import { cueAt, parseSubtitles, Cue } from "@/services/subtitles/srt";
 import { useLibrary, COMPLETION_THRESHOLD } from "@/state/LibraryContext";
@@ -15,6 +15,7 @@ import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useEvent } from "expo";
 import { useKeepAwake } from "expo-keep-awake";
+import type { AudioTrack, SubtitleTrack } from "expo-video";
 import { useVideoPlayer, VideoView, VideoSource } from "expo-video";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from "react-native";
@@ -36,7 +37,7 @@ function videoSourceFor(source: StreamSource): VideoSource {
 export function PlayerScreen() {
   const route = useRoute<RouteProp<RootStackParamList, "Player">>();
   const navigation = useNavigation<Nav>();
-  const { subjectId, detailPath, title, mediaType, season, episode, sources, resumeAt } = route.params;
+  const { subjectId, detailPath, title, mediaType, season, episode, sources, resumeAt, nextEpisode } = route.params;
   const { saveProgress } = useLibrary();
   const { play } = useSound();
   const insets = useSafeAreaInsets();
@@ -63,9 +64,19 @@ export function PlayerScreen() {
   const [bufferedPosition, setBufferedPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [buffering, setBuffering] = useState(true);
+  const [rate, setRate] = useState(1);
+  const [speedPickerOpen, setSpeedPickerOpen] = useState(false);
+  const [nativeAudioTracks, setNativeAudioTracks] = useState<AudioTrack[]>([]);
+  const [nativeSubtitleTracks, setNativeSubtitleTracks] = useState<SubtitleTrack[]>([]);
+  const [nativeAudioId, setNativeAudioId] = useState<string | null>(null);
+  const [nativeSubtitleId, setNativeSubtitleId] = useState<string | null>(null);
+  const [stallSeconds, setStallSeconds] = useState(0);
+  const [pipActive, setPipActive] = useState(false);
 
   const controlsOpacity = useRef(new Animated.Value(1)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rateRef = useRef(rate);
+  rateRef.current = rate;
   const requestSeqRef = useRef(0);
   const sourceRef = useRef<StreamSource | null>(source);
   sourceRef.current = source;
@@ -81,7 +92,10 @@ export function PlayerScreen() {
   const player = useVideoPlayer(initialSource, (p) => {
     p.timeUpdateEventInterval = 0.5;
     p.currentTime = startAt;
-    if (initialSource) p.play();
+    if (initialSource) {
+      p.playbackRate = 1;
+      p.play();
+    }
   });
 
   const playing = useEvent(player, "playingChange", { isPlaying: false });
@@ -125,6 +139,7 @@ export function PlayerScreen() {
         await player.replaceAsync(videoSourceFor(next));
         if (seq !== requestSeqRef.current) return;
         player.currentTime = Math.max(0, at);
+        player.playbackRate = rateRef.current;
         player.play();
       } catch (err) {
         if (seq !== requestSeqRef.current) return;
@@ -192,18 +207,61 @@ export function PlayerScreen() {
     else showError("format", "No playable source was returned for this episode.");
   }, [episodeKey, sources, resumeAt, applySource, showError]);
 
+  // Route params may arrive with no sources ("Next episode" handoff): resolve
+  // them here through the standard Zarhosting endpoint, same as Details does.
+  useEffect(() => {
+    if (sources.length > 0 || !detailPath) return;
+    setStatus("loading");
+    void (async () => {
+      try {
+        const res = await resolveStreams(subjectId, detailPath, season, episode);
+        setAvailableSources(res.sources);
+        const picked = selectSource(res.sources, null);
+        if (!picked) throw new Error("empty");
+        recoveryRef.current = { attempts: 0, triedUrls: new Set(), running: false };
+        await applySource(picked, 0);
+      } catch {
+        showError("empty_response", "The next episode could not be opened. Try again from its details page.");
+      }
+    })();
+  }, [sources, subjectId, detailPath, season, episode, applySource, showError]);
+
+  /** Snapshot the stream's own audio/subtitle tracks from expo-video. */
+  const refreshNativeTracks = useCallback(() => {
+    try {
+      setNativeAudioTracks([...player.availableAudioTracks]);
+      setNativeSubtitleTracks([...player.availableSubtitleTracks]);
+      setNativeAudioId(player.audioTrack?.id ?? null);
+      setNativeSubtitleId(player.subtitleTrack?.id ?? null);
+    } catch {
+      // Track selection is a bonus; never break playback over it.
+    }
+  }, [player]);
+
   useEffect(() => {
     setBuffering(statusChange.status === "loading");
     if (statusChange.status === "readyToPlay") {
       setStatus("ready");
       setFailMessage(null);
+      refreshNativeTracks();
       return;
     }
     if (statusChange.status === "error") {
       const kind = classifyPlayerError(statusChange.error?.message ?? "");
       void recover(kind, null);
     }
-  }, [statusChange, recover]);
+  }, [statusChange, recover, refreshNativeTracks]);
+
+  // Live countdown while buffering, so a stall is visible instead of silent.
+  useEffect(() => {
+    if (!buffering || status === "error") {
+      setStallSeconds(0);
+      return;
+    }
+    setStallSeconds(0);
+    const tick = setInterval(() => setStallSeconds((s) => s + 1), 1000);
+    return () => clearInterval(tick);
+  }, [buffering, status]);
 
   useEffect(() => {
     if (!buffering || status === "error") return;
@@ -342,6 +400,54 @@ export function PlayerScreen() {
     showControls();
   }, [player, showControls]);
 
+  const setPlaybackRate = useCallback(
+    (next: number) => {
+      player.playbackRate = next;
+      setRate(next);
+      setSpeedPickerOpen(false);
+      showControls();
+    },
+    [player, showControls],
+  );
+
+  const pickNativeAudio = useCallback(
+    (t: AudioTrack | null) => {
+      try {
+        player.audioTrack = t;
+        setNativeAudioId(t?.id ?? null);
+      } catch {}
+      setSubtitlePickerOpen(false);
+    },
+    [player],
+  );
+
+  const pickNativeSubtitle = useCallback(
+    (t: SubtitleTrack | null) => {
+      try {
+        player.subtitleTrack = t;
+        setNativeSubtitleId(t?.id ?? null);
+      } catch {}
+      setSubtitlePickerOpen(false);
+    },
+    [player],
+  );
+
+  const goNextEpisode = useCallback(() => {
+    if (!nextEpisode) return;
+    navigation.replace("Player", {
+      subjectId,
+      detailPath,
+      title,
+      posterUrl: route.params.posterUrl,
+      mediaType,
+      season: nextEpisode.season,
+      episode: nextEpisode.episode,
+      resumeAt: 0,
+      sources: [],
+      nextEpisode: nextEpisode.season === season ? { season, episode: nextEpisode.episode + 1 } : null,
+    });
+  }, [navigation, subjectId, detailPath, title, mediaType, season, nextEpisode, route.params.posterUrl]);
+
   const switchSource = useCallback(
     (next: StreamSource) => {
       setQualityPickerOpen(false);
@@ -404,7 +510,9 @@ export function PlayerScreen() {
           contentFit="contain"
           nativeControls={false}
           allowsFullscreen={false}
-          allowsPictureInPicture={false}
+          allowsPictureInPicture
+          onPictureInPictureStart={() => setPipActive(true)}
+          onPictureInPictureStop={() => setPipActive(false)}
         />
       </Pressable>
 
@@ -417,7 +525,13 @@ export function PlayerScreen() {
       {status === "loading" || (buffering && status === "ready") ? (
         <View style={styles.centerOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color={palette.accent} />
-          <Text style={styles.bufferLabel}>{offline ? "Opening offline file…" : "Preparing stream…"}</Text>
+          <Text style={styles.bufferLabel}>
+            {offline
+              ? "Opening offline file…"
+              : stallSeconds >= 5
+                ? `Reconnecting… ${Math.max(0, BUFFER_STALL_TIMEOUT_MS / 1000 - stallSeconds)}s`
+                : "Preparing stream…"}
+          </Text>
         </View>
       ) : null}
 
@@ -434,7 +548,7 @@ export function PlayerScreen() {
         </View>
       ) : null}
 
-      {controlsVisible && status !== "error" ? (
+      {controlsVisible && status !== "error" && !pipActive ? (
         <Animated.View style={[styles.chromeWrap, { opacity: controlsOpacity }]} pointerEvents="box-none">
           <PlayerControls
             title={title}
@@ -445,7 +559,9 @@ export function PlayerScreen() {
             buffered={bufferedPosition}
             isPlaying={isPlaying}
             quality={offline ? "Offline" : source.resolution}
-            subtitleLabel={activeTrack ? activeTrack.languageName : null}
+            subtitleLabel={nativeSubtitleId ? "Embedded" : activeTrack ? activeTrack.languageName : null}
+            rate={rate}
+            hasNextEpisode={Boolean(nextEpisode)}
             isTV={isTV}
             onTogglePlay={togglePlay}
             onSkip={skip}
@@ -456,9 +572,12 @@ export function PlayerScreen() {
             onBack={() => navigation.goBack()}
             onQuality={() => setQualityPickerOpen(true)}
             onSubtitles={() => {
+              refreshNativeTracks();
               void loadCaptions();
               setSubtitlePickerOpen(true);
             }}
+            onSpeed={() => setSpeedPickerOpen(true)}
+            onNextEpisode={goNextEpisode}
           />
         </Animated.View>
       ) : null}
@@ -471,7 +590,15 @@ export function PlayerScreen() {
       ) : null}
 
       {subtitlePickerOpen ? (
-        <PickerSheet title="Subtitles" onClose={() => setSubtitlePickerOpen(false)}>
+        <PickerSheet title="Subtitles & audio" onClose={() => setSubtitlePickerOpen(false)}>
+          <NativeTracksOptions
+            audioTracks={nativeAudioTracks}
+            subtitleTracks={nativeSubtitleTracks}
+            activeAudioId={nativeAudioId}
+            activeSubtitleId={nativeSubtitleId}
+            onPickAudio={pickNativeAudio}
+            onPickSubtitle={pickNativeSubtitle}
+          />
           <SubtitleOptions
             tracks={tracks}
             loading={tracksLoading}
@@ -480,10 +607,12 @@ export function PlayerScreen() {
             offset={subtitleOffset}
             onOffset={setSubtitleOffset}
             onPick={(t) => {
+              if (nativeSubtitleId) pickNativeSubtitle(null);
               void selectTrack(t);
               setSubtitlePickerOpen(false);
             }}
             onOff={() => {
+              if (nativeSubtitleId) pickNativeSubtitle(null);
               void selectTrack(null);
               setSubtitlePickerOpen(false);
             }}
@@ -492,6 +621,12 @@ export function PlayerScreen() {
               void loadCaptions();
             }}
           />
+        </PickerSheet>
+      ) : null}
+
+      {speedPickerOpen ? (
+        <PickerSheet title="Playback speed" onClose={() => setSpeedPickerOpen(false)}>
+          <SpeedOptions activeRate={rate} onPick={setPlaybackRate} />
         </PickerSheet>
       ) : null}
     </View>

@@ -1,5 +1,6 @@
 
 import { LibraryTitle } from "@/state/LibraryContext";
+import { Poster, initialsFor } from "@/components/ui/Poster";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { useLibrary } from "@/state/LibraryContext";
@@ -9,7 +10,7 @@ import { useNavigation } from "@react-navigation/native";
 import Slider from "@react-native-community/slider";
 import { MonitorSmartphone, ShieldCheck, Vibrate, Volume2, VolumeX } from "lucide-react-native";
 import React from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -62,7 +63,7 @@ export function MySpaceScreen() {
               onPress={() => navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id })}
               style={styles.resumeCard}
             >
-              {p.poster_url ? <Image source={{ uri: p.poster_url }} style={styles.resumePoster} /> : <View style={[styles.resumePoster, { backgroundColor: palette.surfaceRaised }]} />}
+              <Poster uri={p.poster_url} style={styles.resumePoster} initials={initialsFor(p.title)} />
               <Text style={styles.resumeTitle} numberOfLines={1}>{p.title}</Text>
               <Text style={styles.resumeMeta}>
                 {p.media_type === "series" && p.season_number ? `S${p.season_number} E${p.episode_number} · ` : ""}
@@ -159,20 +160,12 @@ export function MySpaceScreen() {
 }
 
 function WatchlistTile({ item, onPress }: { item: LibraryTitle; onPress: () => void }) {
-  const [failed, setFailed] = React.useState(false);
-  const initials = item.title.split(/\s+/).slice(0, 2).map((s) => s[0]?.toUpperCase() ?? "").join("");
   const width = 108;
   const height = Math.round((width * 3) / 2);
   return (
     <Pressable onPress={onPress} style={{ width }}>
       <View style={{ width, height, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface }}>
-        {!failed && item.poster_url ? (
-          <Image source={{ uri: item.poster_url }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => setFailed(true)} />
-        ) : (
-          <View style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center", backgroundColor: palette.surfaceRaised }]}>
-            <Text style={{ color: palette.textMuted, fontSize: 22, fontWeight: "800" }}>{initials}</Text>
-          </View>
-        )}
+        <Poster uri={item.poster_url} style={StyleSheet.absoluteFill} initials={initialsFor(item.title)} />
       </View>
       <Text numberOfLines={1} style={{ color: palette.textPrimary, fontSize: 12, fontWeight: "600", marginTop: 4 }}>{item.title}</Text>
       <Text numberOfLines={1} style={{ color: palette.textMuted, fontSize: 10, marginTop: 2 }}>{item.media_type === "series" ? "Series" : "Movie"}</Text>

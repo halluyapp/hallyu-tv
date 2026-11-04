@@ -1,8 +1,11 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { CaptionTrack, StreamSource } from "@/types/provider";
+import type { AudioTrack, SubtitleTrack } from "expo-video";
 import React from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Slider from "@react-native-community/slider";
+
+export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 
 /** Bottom sheets for quality and subtitle selection (shared visual system). */
 
@@ -132,7 +135,92 @@ export function SubtitleOptions({
   );
 }
 
+/** Playback speed choices shown in the speed sheet. */
+export function SpeedOptions({
+  activeRate,
+  onPick,
+}: {
+  activeRate: number;
+  onPick: (rate: number) => void;
+}) {
+  return (
+    <>
+      {PLAYBACK_RATES.map((rate) => (
+        <Pressable
+          key={rate}
+          style={[styles.option, rate === activeRate && styles.optionActive]}
+          onPress={() => onPick(rate)}
+        >
+          <Text style={styles.optionTitle}>{rate === 1 ? "Normal" : `${rate}×`}</Text>
+          {rate === 1 ? <Text style={styles.optionMeta}>Default</Text> : null}
+        </Pressable>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Audio + subtitle tracks embedded in the stream itself (expo-video native
+ * selection). Hidden when the current source has none.
+ */
+export function NativeTracksOptions({
+  audioTracks,
+  subtitleTracks,
+  activeAudioId,
+  activeSubtitleId,
+  onPickAudio,
+  onPickSubtitle,
+}: {
+  audioTracks: AudioTrack[];
+  subtitleTracks: SubtitleTrack[];
+  activeAudioId: string | null;
+  activeSubtitleId: string | null;
+  onPickAudio: (t: AudioTrack | null) => void;
+  onPickSubtitle: (t: SubtitleTrack | null) => void;
+}) {
+  if (audioTracks.length === 0 && subtitleTracks.length === 0) return null;
+  return (
+    <>
+      {audioTracks.length > 1 ? (
+        <View style={{ gap: spacing.sm }}>
+          <Text style={styles.groupLabel}>Audio</Text>
+          {audioTracks.map((t) => (
+            <Pressable
+              key={t.id}
+              style={[styles.option, t.id === activeAudioId && styles.optionActive]}
+              onPress={() => onPickAudio(t)}
+            >
+              <Text style={styles.optionTitle}>{t.label || t.language || "Audio"}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {subtitleTracks.length > 0 ? (
+        <View style={{ gap: spacing.sm }}>
+          <Text style={styles.groupLabel}>Embedded subtitles</Text>
+          <Pressable
+            style={[styles.option, activeSubtitleId === null && styles.optionActive]}
+            onPress={() => onPickSubtitle(null)}
+          >
+            <Text style={styles.optionTitle}>Off</Text>
+          </Pressable>
+          {subtitleTracks.map((t) => (
+            <Pressable
+              key={t.id}
+              style={[styles.option, t.id === activeSubtitleId && styles.optionActive]}
+              onPress={() => onPickSubtitle(t)}
+            >
+              <Text style={styles.optionTitle}>{t.label || t.language || "Subtitles"}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
+  groupLabel: { ...typeScale.micro, color: palette.textSecondary, marginTop: spacing.sm },
   sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: palette.scrim, justifyContent: "flex-end" },
   sheet: {
     backgroundColor: palette.backgroundElevated,

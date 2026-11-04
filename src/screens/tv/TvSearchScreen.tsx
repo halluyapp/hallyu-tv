@@ -2,11 +2,12 @@ import { palette, radius, spacing } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { searchCatalogue } from "@/services/provider/adapter";
 import { CatalogueItem } from "@/types/provider";
+import { Poster, initialsFor } from "@/components/ui/Poster";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
 import { ChevronLeft, Search } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -72,27 +73,31 @@ export function TvSearchScreen() {
         results.length === 0 ? (
           <Text style={styles.empty}>Nothing matched “{query}”.</Text>
         ) : (
-          <ScrollView contentContainerStyle={styles.grid} showsVerticalScrollIndicator={false}>
-            {results.map((item, idx) => (
+          <FlatList
+            data={results}
+            numColumns={4}
+            keyExtractor={(item) => `${item.subjectId}_${item.slug}`}
+            contentContainerStyle={styles.grid}
+            showsVerticalScrollIndicator={false}
+            windowSize={5}
+            initialNumToRender={12}
+            maxToRenderPerBatch={12}
+            removeClippedSubviews
+            renderItem={({ item, index }) => (
               <Pressable
-                key={`${item.subjectId}_${item.slug}`}
                 onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
-                onFocus={() => setFocusedIdx(idx)}
+                onFocus={() => setFocusedIdx(index)}
                 onBlur={() => setFocusedIdx(null)}
-                style={[styles.card, focusedIdx === idx && styles.cardFocused]}
+                style={[styles.card, focusedIdx === index && styles.cardFocused]}
               >
-                {item.posterUrl ? (
-                  <Image source={{ uri: item.posterUrl }} style={styles.poster} resizeMode="cover" />
-                ) : (
-                  <View style={[styles.poster, { backgroundColor: palette.surfaceRaised }]} />
-                )}
+                <Poster uri={item.posterUrl} style={styles.poster} initials={initialsFor(item.name)} />
                 <Text style={styles.cardTitle} numberOfLines={2}>{item.name}</Text>
                 <Text style={styles.cardMeta}>
                   {[item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · ")}
                 </Text>
               </Pressable>
-            ))}
-          </ScrollView>
+            )}
+          />
         )
       ) : null}
 
@@ -127,7 +132,7 @@ const styles = StyleSheet.create({
     height: 48,
   },
   input: { flex: 1, color: palette.textPrimary, fontSize: 16, paddingVertical: 0 },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.lg, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
+  grid: { gap: spacing.lg, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
   card: { width: 190, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface },
   cardFocused: { transform: [{ scale: 1.05 }], borderColor: palette.accent, borderWidth: 2 },
   poster: { width: 190, height: 107, backgroundColor: palette.surfaceRaised },

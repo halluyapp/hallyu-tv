@@ -1,7 +1,8 @@
 import { palette, radius, spacing, posterRatio } from "@/design-system/tokens";
 import { CatalogueItem } from "@/types/provider";
-import React, { memo, useState } from "react";
-import { ActivityIndicator, Image, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Poster, initialsFor } from "@/components/ui/Poster";
+import React, { memo } from "react";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { GlassPanel } from "./GlassPanel";
 import { Star } from "lucide-react-native";
 
@@ -16,34 +17,11 @@ export const PosterCard = memo(function PosterCard({ item, width, onPress }: Pos
   const { width: screenW } = useWindowDimensions();
   const w = width ?? Math.round((screenW - spacing.xl * 2 - spacing.lg * 2) / 3);
   const height = Math.round((w * posterRatio.height) / posterRatio.width);
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  const initials = item.name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase() ?? "")
-    .join("");
 
   return (
     <GlassPanel onPress={onPress} style={{ width, marginRight: spacing.md }} pressedScale={0.95} sound="tap">
       <View style={{ height, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface }}>
-        {!failed && item.posterUrl ? (
-          <>
-            {!loaded && <SkeletonFill />}
-            <Image
-              source={{ uri: item.posterUrl }}
-              style={[StyleSheet.absoluteFill, loaded ? undefined : { opacity: 0 }]}
-              onLoad={() => setLoaded(true)}
-              onError={() => setFailed(true)}
-              resizeMode="cover"
-            />
-          </>
-        ) : (
-          <View style={[StyleSheet.absoluteFill, styles.fallback]}>
-            <Text style={styles.fallbackInitials}>{initials}</Text>
-          </View>
-        )}
+        <Poster uri={item.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(item.name)} />
         {item.rating ? (
           <View style={styles.ratingPill}>
             <Star size={9} color={palette.warning} fill={palette.warning} />
@@ -64,11 +42,7 @@ export const PosterCard = memo(function PosterCard({ item, width, onPress }: Pos
 });
 
 export function SkeletonFill() {
-  return (
-    <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.surfaceRaised, justifyContent: "center", alignItems: "center" }]}>
-      <ActivityIndicator size="small" color={palette.textMuted} />
-    </View>
-  );
+  return <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.surfaceRaised }]} />;
 }
 
 const styles = StyleSheet.create({
@@ -96,15 +70,4 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   ratingText: { color: palette.textPrimary, fontSize: 10, fontWeight: "700" },
-  fallback: {
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: palette.surfaceRaised,
-  },
-  fallbackInitials: {
-    color: palette.textMuted,
-    fontSize: 28,
-    fontWeight: "800",
-    letterSpacing: 1,
-  },
 });

@@ -31,6 +31,8 @@ export type RootStackParamList = {
     episode: number;
     resumeAt: number;
     sources: StreamSource[];
+    /** When set, the player offers this following episode once this one ends. */
+    nextEpisode?: { season: number; episode: number } | null;
   };
   TvHome: undefined;
   TvSearch: undefined;
