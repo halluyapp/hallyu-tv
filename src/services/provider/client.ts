@@ -24,8 +24,24 @@ export const PROVIDER_MEDIA_HEADERS: Record<string, string> = {
   Origin: "https://moviebox.ph",
 };
 
-const API_TIMEOUT_MS = 15_000;
+/**
+ * Per-endpoint budgets. A single global timeout meant Details could block for
+ * ~45s (15s x 3 attempts with backoff) before showing an error. Catalogue reads
+ * fail fast and retry less; stream resolution keeps its generous budget because
+ * the resolver is genuinely slower than the other endpoints.
+ */
+export const TIMEOUTS = {
+  home: 12_000,
+  search: 10_000,
+  detail: 15_000,
+  stream: 20_000,
+  captions: 15_000,
+} as const;
+
+const API_TIMEOUT_MS = TIMEOUTS.home;
 const MAX_RETRIES = 2;
+/** Search is user-driven: one attempt, no retry storm while typing. */
+export const SEARCH_RETRIES = 0;
 
 function backoff(attempt: number): number {
   return Math.min(1000 * 2 ** attempt, 4000) + Math.random() * 300;

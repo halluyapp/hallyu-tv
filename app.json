@@ -6,9 +6,10 @@
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "scheme": "hallyu-tv",
-    "backgroundColor": "#080A0D",
+    "backgroundColor": "#050810",
     "splash": {
-      "backgroundColor": "#080A0D",
+      "image": "./assets/images/splash-icon.png",
+      "backgroundColor": "#050810",
       "resizeMode": "contain"
     },
     "android": {
@@ -17,20 +18,28 @@
       "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#080A0D"
+        "backgroundColor": "#050810"
       },
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.POST_NOTIFICATIONS"
-      ]
+      ],
+      "backgroundColor": "#050810",
+      "tvBanner": "./assets/tv-banner.png"
     },
     "androidStatusBar": {
       "translucent": true,
-      "backgroundColor": "#080A0D"
+      "backgroundColor": "#050810"
     },
     "plugins": [
-      ["expo-video", { "supportsPictureInPicture": true, "supportsBackgroundPlayback": true }],
+      [
+        "expo-video",
+        {
+          "supportsPictureInPicture": true,
+          "supportsBackgroundPlayback": true
+        }
+      ],
       "./plugins/withHallyuDownloader",
       "./plugins/withAndroidTvSupport"
     ]

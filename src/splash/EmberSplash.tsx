@@ -1,4 +1,4 @@
-import { palette, spacing } from "@/design-system/tokens";
+import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { APP_NAME } from "@/config/branding";
 import React, { useEffect, useRef } from "react";
 import { Animated, Easing, StyleSheet, Text, View } from "react-native";
@@ -35,24 +35,27 @@ const styles = StyleSheet.create({
     gap: spacing.xl,
   },
   mark: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+    width: 88,
+    height: 88,
+    borderRadius: radius.pill,
     backgroundColor: palette.accentSoft,
+    borderWidth: 1,
+    borderColor: palette.glassStrokeStrong,
     alignItems: "center",
     justifyContent: "center",
   },
   flame: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: palette.accent,
+    borderWidth: 2,
+    borderColor: palette.cyan,
   },
   wordmark: {
+    ...typeScale.title,
     color: palette.textPrimary,
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: 4,
+    letterSpacing: 5,
     textTransform: "uppercase",
   },
 });

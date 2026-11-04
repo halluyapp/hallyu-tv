@@ -1,8 +1,10 @@
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/States";
+import { isResumable, primaryActionLabel } from "@/services/library/resume";
 import { Poster, initialsFor } from "@/components/ui/Poster";
-import { SkeletonFill } from "@/components/ui/PosterCard";
+import { Skeleton } from "@/components/ui/States";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { heroScrim, heroScrimPositions } from "@/design-system/gradients";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
 import { selectDownloadSource } from "@/services/provider/streams";
@@ -15,7 +17,7 @@ import { ProviderError, SeasonInfo, TitleDetail } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight, Volume2, VolumeX } from "lucide-react-native";
 
@@ -45,23 +47,32 @@ export function DetailsScreen() {
   const [episode, setEpisode] = useState(1);
   const [resolving, setResolving] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+  /** Confirmation/feedback for a download started from this screen. */
+  const [downloadNote, setDownloadNote] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
   const initializedRef = useRef(false);
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const load = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setError(null);
     setDetail(null);
     initializedRef.current = false;
     try {
-      const d = await fetchDetail(detailPath);
-      setDetail(d);
+      const d = await fetchDetail(detailPath, { signal: controller.signal });
+      if (!controller.signal.aborted) setDetail(d);
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof ProviderError ? err.message : "Could not load this title.");
     }
   }, [detailPath]);
 
   useEffect(() => {
     void load();
+    return () => abortRef.current?.abort();
   }, [load]);
 
   // Once detail + local library are ready, resume the latest watched episode
@@ -147,8 +158,11 @@ export function DetailsScreen() {
           source: pick,
           expectedBytes: pick.sizeBytes,
         });
-        if (Platform.isTV) navigation.navigate("TvDownloads");
-        else navigation.navigate("Main");
+        // Stay on the title and report what happened. Bouncing the user to the
+        // Home tab with no confirmation made a successful action look broken.
+        playTone("confirm");
+        setResolutionError(null);
+        setDownloadNote("Download queued — track it in Downloads. It continues in the background.");
       } catch (err) {
         playTone("error");
         setResolutionError(err instanceof ProviderError ? err.message : "Could not start the download.");
@@ -199,7 +213,14 @@ export function DetailsScreen() {
       </View>
     );
   }
-  if (!detail) return <View style={styles.root}><SkeletonFill /></View>;
+  if (!detail) {
+    return (
+      <View style={[styles.root, { paddingTop: insets.top + spacing.xl, paddingHorizontal: spacing.xl, gap: spacing.lg }]}>
+        <Skeleton width="100%" height={240} />
+        <Text style={styles.loadingNote}>Loading title…</Text>
+      </View>
+    );
+  }
 
   const synopsis = detail.description ?? "No synopsis was provided for this title.";
   const episodes = season ? Array.from({ length: season.maxEp }, (_, i) => i + 1) : [];
@@ -210,11 +231,7 @@ export function DetailsScreen() {
         {detail.backdropUrl ?? detail.posterUrl ? (
           <Poster uri={detail.backdropUrl ?? detail.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(detail.title)} />
         ) : null}
-        <LinearGradient
-          colors={["rgba(8,10,13,0.28)", "rgba(8,10,13,0.62)", "rgba(8,10,13,1)"]}
-          locations={[0, 0.55, 1]}
-          style={StyleSheet.absoluteFill}
-        />
+        <LinearGradient colors={heroScrim} locations={heroScrimPositions} style={StyleSheet.absoluteFill} />
         <Pressable style={[styles.backBtn, { top: insets.top + spacing.sm }]} onPress={() => navigation.goBack()} hitSlop={8}>
           <ChevronDown size={22} color={palette.textPrimary} />
         </Pressable>
@@ -233,14 +250,14 @@ export function DetailsScreen() {
 
         <View style={styles.actionsRow}>
           <Button
-            label={resolving ? "Preparing…" : resume && !resume.completed ? "Resume" : "Play"}
-            icon={<Play size={16} color="#1A0E0A" fill="#1A0E0A" />}
+            label={resolving ? "Preparing…" : primaryActionLabel(resume)}
+            icon={<Play size={16} color={palette.textOnAccent} fill={palette.textOnAccent} />}
             loading={resolving}
-            onPress={() => void play({ resumeAt: resume && !resume.completed ? resume.position_seconds : 0 })}
+            onPress={() => void play({ resumeAt: isResumable(resume) ? Math.floor(resume.position_seconds) : 0 })}
             style={{ flex: 1 }}
           />
           <Pressable style={styles.iconAction} onPress={onWatchlist}>
-            {saved ? <BookmarkCheck size={20} color={palette.accent} /> : <Bookmark size={20} color={palette.textSecondary} />}
+            {saved ? <BookmarkCheck size={20} color={palette.cyan} /> : <Bookmark size={20} color={palette.textSecondary} />}
           </Pressable>
           <Pressable style={styles.iconAction} onPress={() => void startDownload({})} disabled={resolving}>
             <Download size={20} color={palette.textSecondary} />
@@ -248,6 +265,7 @@ export function DetailsScreen() {
         </View>
 
         {resolutionError ? <Text style={styles.errorNote}>{resolutionError}</Text> : null}
+        {downloadNote ? <Text style={styles.noteText}>{downloadNote}</Text> : null}
 
         {detail.genre ? (
           <View style={styles.chips}>
@@ -266,8 +284,8 @@ export function DetailsScreen() {
 
         {detail.description ? (
           <Pressable style={styles.listenBtn} onPress={toggleSpeaking} accessibilityRole="button" accessibilityLabel={speaking ? "Stop reading the synopsis" : "Read the synopsis aloud"}>
-            {speaking ? <VolumeX size={15} color={palette.accent} /> : <Volume2 size={15} color={palette.textSecondary} />}
-            <Text style={[styles.listenLabel, speaking && { color: palette.accent }]}>{speaking ? "Stop reading" : "Listen"}</Text>
+            {speaking ? <VolumeX size={15} color={palette.cyan} /> : <Volume2 size={15} color={palette.textSecondary} />}
+            <Text style={[styles.listenLabel, speaking && { color: palette.cyan }]}>{speaking ? "Stop reading" : "Listen"}</Text>
           </Pressable>
         ) : null}
 
@@ -294,7 +312,7 @@ export function DetailsScreen() {
             ) : null}
             <View style={{ gap: spacing.sm }}>
               {episodes.map((ep) => {
-                const p = resumeFor(detail.subjectId, season!.season, ep);
+                const p = resumeFor(detail.subjectId, season?.season ?? 1, ep);
                 const watched = p ? p.completed || p.position_seconds / Math.max(p.duration_seconds, 1) > 0.9 : false;
                 return (
                   <Pressable
@@ -352,10 +370,12 @@ const styles = StyleSheet.create({
   backBtn: {
     position: "absolute",
     left: spacing.lg,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "rgba(8,10,13,0.6)",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: palette.glassStroke,
+    backgroundColor: palette.scrim,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -374,6 +394,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   errorNote: { color: palette.danger, fontSize: 13, marginTop: spacing.md },
+  loadingNote: { ...typeScale.caption, color: palette.textMuted, textAlign: "center", marginTop: spacing.xxl },
+  noteText: { color: palette.cyan, fontSize: 13, marginTop: spacing.md, lineHeight: 19 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.lg },
   chip: {
     backgroundColor: palette.glassFill,
@@ -385,7 +407,7 @@ const styles = StyleSheet.create({
   },
   chipText: { color: palette.textSecondary, fontSize: 12, fontWeight: "600" },
   synopsis: { ...typeScale.body, color: palette.textPrimary, lineHeight: 23, marginTop: spacing.lg },
-  expandHint: { color: palette.accent, fontSize: 13, fontWeight: "700", marginTop: spacing.xs },
+  expandHint: { color: palette.cyan, fontSize: 13, fontWeight: "700", marginTop: spacing.xs },
   listenBtn: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -412,7 +434,7 @@ const styles = StyleSheet.create({
   },
   seasonChipActive: { backgroundColor: palette.accent, borderColor: palette.accent },
   seasonChipText: { color: palette.textSecondary, fontSize: 13, fontWeight: "600" },
-  seasonChipTextActive: { color: "#1A0E0A" },
+  seasonChipTextActive: { color: palette.textOnAccent },
   episodeRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -423,7 +445,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.md,
   },
-  episodeRowActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.08)" },
+  episodeRowActive: { borderColor: palette.cyan, backgroundColor: palette.accentSoft },
   episodeNumber: {
     width: 34,
     height: 34,

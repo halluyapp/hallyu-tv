@@ -1,32 +1,23 @@
-import { palette, radius, spacing } from "@/design-system/tokens";
+import { chrome } from "@/design-system/gradients";
+import { materials } from "@/design-system/materials";
+import { palette, radius, spacing, tvTypeScale, typeScale } from "@/design-system/tokens";
+import { TvFocusable } from "@/components/tv/TvFocusable";
+import { BlurSurface } from "@/components/ui/BlurSurface";
+import { ChevronLeft, Gauge, Pause, Play, RotateCcw, RotateCw, SkipForward, Subtitles, Wifi } from "lucide-react-native";
 import React, { useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
-import {
-  ChevronLeft,
-  Gauge,
-  Pause,
-  Play,
-  RotateCcw,
-  RotateCw,
-  SkipForward,
-  Subtitles,
-  Wifi,
-} from "lucide-react-native";
+import { PanResponder, StyleSheet, Text, View } from "react-native";
 
 /**
- * Player chrome: top bar, transport controls, seek bar with a buffered layer,
- * and the quality/subtitle entry points. Hides itself while playing; any tap
- * brings it back. All times are seconds.
+ * Player chrome.
+ *
+ * Two interaction models, one component:
+ *  - **Phone**: tap the timeline to scrub; a PanResponder drags it.
+ *  - **TV**: the timeline is a focusable control and the remote seeks with
+ *    left/right; every button is a ≥60 px focus target with a cyan ring.
+ *
+ * The parent keeps the chrome mounted while focus is inside it, so the controls
+ * can never vanish under the remote's cursor.
  */
-
-function fmt(t: number): string {
-  if (!Number.isFinite(t) || t < 0) t = 0;
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const s = Math.floor(t % 60);
-  const mm = String(m).padStart(h > 0 ? 2 : 1, "0");
-  return (h > 0 ? `${h}:` : "") + `${mm}:${String(s).padStart(2, "0")}`;
-}
 
 export interface PlayerControlsProps {
   title: string;
@@ -49,14 +40,25 @@ export interface PlayerControlsProps {
   onSubtitles: () => void;
   onSpeed: () => void;
   onNextEpisode: () => void;
+  /** TV: report whether focus is inside the chrome so the parent can hold it. */
+  onFocusHold?: (held: boolean) => void;
+}
+
+function fmt(t: number): string {
+  if (!Number.isFinite(t) || t < 0) t = 0;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = Math.floor(t % 60);
+  const mm = String(m).padStart(h > 0 ? 2 : 1, "0");
+  return (h > 0 ? `${h}:` : "") + `${mm}:${String(s).padStart(2, "0")}`;
 }
 
 export function PlayerControls(props: PlayerControlsProps) {
   const { position, duration, buffered, isPlaying, isTV } = props;
   const [scrub, setScrub] = useState<number | null>(null);
   const [trackWidth, setTrackWidth] = useState(1);
-  const [focused, setFocused] = useState<string | null>(null);
   const scrubRef = useRef({ value: 0 });
+  const type = isTV ? tvTypeScale : typeScale;
 
   // While scrubbing, ignore incoming position updates and seek once, on release.
   const shown = scrub ?? Math.min(position, duration || position);
@@ -105,126 +107,192 @@ export function PlayerControls(props: PlayerControlsProps) {
     [],
   );
 
-  const focusStyle = (id: string) => (isTV && focused === id ? styles.focused : null);
-
   return (
     <View style={styles.chrome} pointerEvents="box-none">
       {/* Top bar */}
-      <View style={styles.topBar}>
-        <Pressable
+      <View style={styles.topBar} pointerEvents="box-none">
+        <TvFocusable
           onPress={props.onBack}
-          onFocus={() => setFocused("back")}
-          onBlur={() => setFocused(null)}
-          hasTVPreferredFocus={isTV}
-          style={[styles.circleBtn, focusStyle("back")]}
-          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Exit player"
+          style={[styles.circleBtn, { width: isTV ? 60 : 44, height: isTV ? 60 : 44, borderRadius: isTV ? 30 : 22 }]}
+          onFocus={() => props.onFocusHold?.(true)}
+          onBlur={() => props.onFocusHold?.(false)}
         >
-          <ChevronLeft size={22} color={palette.textPrimary} />
-        </Pressable>
-        <View style={{ flex: 1 }}>
-          <Text numberOfLines={1} style={styles.titleText}>{props.title}</Text>
-          {props.episodeLabel ? <Text style={styles.episodeText}>{props.episodeLabel}</Text> : null}
+          <ChevronLeft size={isTV ? 28 : 22} color={palette.textPrimary} />
+        </TvFocusable>
+        <View style={{ flex: 1 }} pointerEvents="none">
+          <Text numberOfLines={1} style={[type.headline, styles.titleText]}>
+            {props.title}
+          </Text>
+          {props.episodeLabel ? <Text style={[type.caption, styles.episodeText]}>{props.episodeLabel}</Text> : null}
         </View>
-        <View style={styles.transportPill}>
-          {props.transportLabel === "Offline" ? null : <Wifi size={11} color={palette.textMuted} />}
-          <Text style={styles.transportText}>{props.transportLabel}</Text>
+        <View style={styles.transportPill} pointerEvents="none">
+          {props.transportLabel === "Offline" ? null : <Wifi size={12} color={palette.textMuted} />}
+          <Text style={type.caption}>{props.transportLabel}</Text>
         </View>
       </View>
 
       {/* Center transport */}
       <View style={styles.centerRow} pointerEvents="box-none">
-        <Pressable
+        <TvFocusable
           onPress={() => props.onSkip(-10)}
-          onFocus={() => setFocused("back10")}
-          onBlur={() => setFocused(null)}
-          style={[styles.skipBtn, focusStyle("back10")]}
+          accessibilityRole="button"
+          accessibilityLabel="Skip back 10 seconds"
+          style={[styles.skipBtn, isTV && styles.skipBtnTv]}
+          onFocus={() => props.onFocusHold?.(true)}
+          onBlur={() => props.onFocusHold?.(false)}
         >
-          <RotateCcw size={24} color={palette.textPrimary} />
-          <Text style={styles.skipLabel}>10</Text>
-        </Pressable>
-        <Pressable
+          <RotateCcw size={isTV ? 30 : 24} color={palette.textPrimary} />
+          <Text style={[type.caption, styles.skipLabel]}>10</Text>
+        </TvFocusable>
+
+        <TvFocusable
           onPress={props.onTogglePlay}
-          onFocus={() => setFocused("play")}
-          onBlur={() => setFocused(null)}
-          style={[styles.playBtn, focusStyle("play")]}
+          hasTVPreferredFocus={isTV}
+          accessibilityRole="button"
+          accessibilityLabel={isPlaying ? "Pause" : "Play"}
+          focusScale={1.05}
+          style={[styles.playBtn, isTV && styles.playBtnTv]}
+          onFocus={() => props.onFocusHold?.(true)}
+          onBlur={() => props.onFocusHold?.(false)}
         >
           {isPlaying ? (
-            <Pause size={30} color="#160B08" fill="#160B08" />
+            <Pause size={isTV ? 38 : 30} color={palette.textOnAccent} fill={palette.textOnAccent} />
           ) : (
-            <Play size={30} color="#160B08" fill="#160B08" style={{ marginLeft: 3 }} />
+            <Play size={isTV ? 38 : 30} color={palette.textOnAccent} fill={palette.textOnAccent} style={{ marginLeft: 3 }} />
           )}
-        </Pressable>
-        <Pressable
+        </TvFocusable>
+
+        <TvFocusable
           onPress={() => props.onSkip(10)}
-          onFocus={() => setFocused("fwd10")}
-          onBlur={() => setFocused(null)}
-          style={[styles.skipBtn, focusStyle("fwd10")]}
+          accessibilityRole="button"
+          accessibilityLabel="Skip forward 10 seconds"
+          style={[styles.skipBtn, isTV && styles.skipBtnTv]}
+          onFocus={() => props.onFocusHold?.(true)}
+          onBlur={() => props.onFocusHold?.(false)}
         >
-          <RotateCw size={24} color={palette.textPrimary} />
-          <Text style={styles.skipLabel}>10</Text>
-        </Pressable>
+          <RotateCw size={isTV ? 30 : 24} color={palette.textPrimary} />
+          <Text style={[type.caption, styles.skipLabel]}>10</Text>
+        </TvFocusable>
       </View>
 
-      {/* Bottom: seek + actions */}
-      <View style={styles.bottomStack}>
-        <View style={styles.seekRow}>
-          <Text style={styles.timeLabel}>{fmt(shown)}</Text>
-          <View
-            style={styles.trackHit}
-            onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-            {...pan.panHandlers}
-          >
-            <View style={styles.track}>
-              <View style={[styles.trackBuffered, { width: `${bufferedPct * 100}%` }]} />
-              <View style={[styles.trackElapsed, { width: `${pct * 100}%` }]} />
-              <View style={[styles.thumb, { left: `${pct * 100}%` }]} />
+      {/* Bottom: timeline + actions */}
+      <View style={styles.bottomStack} pointerEvents="box-none">
+        <BlurSurface material="primary" radius={radius.sheet} style={styles.shelf}>
+          <View style={styles.shelfInner}>
+          <View style={styles.seekRow}>
+            <Text style={[type.caption, styles.timeLabel]}>{fmt(shown)}</Text>
+
+            {/*
+             * Phone: the track itself is draggable (PanResponder).
+             * TV: a remote has no pointer. React Native 0.81 core exposes no
+             * TV key-event API (that moved out of core with the tvOS fork), so
+             * instead of shipping a seek bar that cannot be operated, the
+             * timeline is read-only on TV and the two focusable buttons below
+             * it perform the seeking.
+             */}
+            {isTV ? (
+              <View style={styles.trackHit} pointerEvents="none">
+                <View style={styles.track}>
+                  <View style={[styles.trackBuffered, { width: `${bufferedPct * 100}%` }]} />
+                  <View style={[styles.trackElapsed, { width: `${pct * 100}%` }]} />
+                  <View style={[styles.thumb, { left: `${pct * 100}%` }]} />
+                </View>
+              </View>
+            ) : (
+              <View style={styles.trackHit} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)} {...pan.panHandlers}>
+                <View style={styles.track}>
+                  <View style={[styles.trackBuffered, { width: `${bufferedPct * 100}%` }]} />
+                  <View style={[styles.trackElapsed, { width: `${pct * 100}%` }]} />
+                  <View style={[styles.thumb, { left: `${pct * 100}%` }]} />
+                </View>
+              </View>
+            )}
+
+            <Text style={[type.caption, styles.timeLabel]}>{total > 0 ? fmt(total) : "--:--"}</Text>
+          </View>
+
+          <View style={styles.actionsRow}>
+            {isTV ? (
+              <>
+                <TvFocusable
+                  onPress={() => props.onSkip(-10)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Seek back 10 seconds"
+                  style={styles.pill}
+                  onFocus={() => props.onFocusHold?.(true)}
+                  onBlur={() => props.onFocusHold?.(false)}
+                >
+                  <RotateCcw size={15} color={palette.textSecondary} />
+                  <Text style={[type.caption, styles.pillText]}>10s</Text>
+                </TvFocusable>
+                <TvFocusable
+                  onPress={() => props.onSkip(30)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Seek forward 30 seconds"
+                  style={styles.pill}
+                  onFocus={() => props.onFocusHold?.(true)}
+                  onBlur={() => props.onFocusHold?.(false)}
+                >
+                  <RotateCw size={15} color={palette.textSecondary} />
+                  <Text style={[type.caption, styles.pillText]}>30s</Text>
+                </TvFocusable>
+              </>
+            ) : null}
+            <TvFocusable
+              onPress={props.onSpeed}
+              accessibilityRole="button"
+              accessibilityLabel={`Playback speed ${props.rate} times`}
+              style={styles.pill}
+              onFocus={() => props.onFocusHold?.(true)}
+              onBlur={() => props.onFocusHold?.(false)}
+            >
+              <Text style={[type.caption, styles.pillText, props.rate !== 1 && { color: palette.cyan }]}>{props.rate === 1 ? "1×" : `${props.rate}×`}</Text>
+            </TvFocusable>
+
+            <TvFocusable
+              onPress={props.onSubtitles}
+              accessibilityRole="button"
+              accessibilityLabel={props.subtitleLabel ? `Subtitles: ${props.subtitleLabel}` : "Subtitles and audio"}
+              style={styles.pill}
+              onFocus={() => props.onFocusHold?.(true)}
+              onBlur={() => props.onFocusHold?.(false)}
+            >
+              <Subtitles size={15} color={props.subtitleLabel ? palette.cyan : palette.textSecondary} />
+              <Text style={[type.caption, styles.pillText, props.subtitleLabel && { color: palette.cyan }]}>
+                {props.subtitleLabel ?? "Subtitles"}
+              </Text>
+            </TvFocusable>
+
+            <TvFocusable
+              onPress={props.onQuality}
+              accessibilityRole="button"
+              accessibilityLabel={`Quality ${props.quality ?? "auto"}`}
+              style={styles.pill}
+              onFocus={() => props.onFocusHold?.(true)}
+              onBlur={() => props.onFocusHold?.(false)}
+            >
+              <Gauge size={15} color={palette.textSecondary} />
+              <Text style={[type.caption, styles.pillText]}>{props.quality ?? "Auto"}</Text>
+            </TvFocusable>
+
+            {props.hasNextEpisode ? (
+              <TvFocusable
+                onPress={props.onNextEpisode}
+                accessibilityRole="button"
+                accessibilityLabel="Play next episode"
+                style={styles.pill}
+                onFocus={() => props.onFocusHold?.(true)}
+                onBlur={() => props.onFocusHold?.(false)}
+              >
+                <SkipForward size={15} color={palette.cyan} />
+                <Text style={[type.caption, styles.pillText, { color: palette.cyan }]}>Next episode</Text>
+              </TvFocusable>
+            ) : null}
             </View>
           </View>
-          <Text style={styles.timeLabel}>{total > 0 ? fmt(total) : "--:--"}</Text>
-        </View>
-        <View style={styles.actionsRow}>
-          <Pressable
-            onPress={props.onSpeed}
-            onFocus={() => setFocused("speed")}
-            onBlur={() => setFocused(null)}
-            style={[styles.pill, focusStyle("speed")]}
-          >
-            <Text style={[styles.pillText, props.rate !== 1 && { color: palette.accent }]}>
-              {props.rate === 1 ? "1×" : `${props.rate}×`}
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={props.onSubtitles}
-            onFocus={() => setFocused("subs")}
-            onBlur={() => setFocused(null)}
-            style={[styles.pill, focusStyle("subs")]}
-          >
-            <Subtitles size={14} color={props.subtitleLabel ? palette.accent : palette.textSecondary} />
-            <Text style={[styles.pillText, props.subtitleLabel && { color: palette.accent }]}>
-              {props.subtitleLabel ?? "Subtitles"}
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={props.onQuality}
-            onFocus={() => setFocused("quality")}
-            onBlur={() => setFocused(null)}
-            style={[styles.pill, focusStyle("quality")]}
-          >
-            <Gauge size={14} color={palette.textSecondary} />
-            <Text style={styles.pillText}>{props.quality ?? "Auto"}</Text>
-          </Pressable>
-          {props.hasNextEpisode ? (
-            <Pressable
-              onPress={props.onNextEpisode}
-              onFocus={() => setFocused("next")}
-              onBlur={() => setFocused(null)}
-              style={[styles.pill, focusStyle("next")]}
-            >
-              <SkipForward size={14} color={palette.accent} />
-              <Text style={[styles.pillText, { color: palette.accent }]}>Next episode</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        </BlurSurface>
       </View>
     </View>
   );
@@ -232,87 +300,74 @@ export function PlayerControls(props: PlayerControlsProps) {
 
 const styles = StyleSheet.create({
   chrome: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between" },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-  },
+  topBar: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.xl },
   circleBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(10,12,16,0.62)",
+    backgroundColor: chrome.scrimSoft,
+    borderWidth: 1,
+    borderColor: palette.glassStroke,
     alignItems: "center",
     justifyContent: "center",
   },
-  titleText: { color: palette.textPrimary, fontSize: 16, fontWeight: "700" },
-  episodeText: { color: palette.textMuted, fontSize: 12, marginTop: 1 },
+  titleText: { color: palette.textPrimary },
+  episodeText: { color: palette.textMuted, marginTop: 1 },
   transportPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    backgroundColor: "rgba(10,12,16,0.62)",
+    backgroundColor: chrome.scrimSoft,
     borderRadius: radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: palette.glassStroke,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  transportText: { color: palette.textMuted, fontSize: 11, fontWeight: "600" },
-  centerRow: { ...StyleSheet.absoluteFillObject, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 36 },
-  skipBtn: { alignItems: "center", justifyContent: "center", padding: 10, borderRadius: radius.md },
-  skipLabel: { color: palette.textPrimary, fontSize: 9, fontWeight: "800", marginTop: -3 },
+  centerRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.xxl },
+  skipBtn: { alignItems: "center", justifyContent: "center", width: 56, height: 56, gap: 1 },
+  skipBtnTv: { width: 84, height: 84 },
+  skipLabel: { color: palette.textSecondary },
   playBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: palette.accent,
+    borderWidth: 1,
+    borderColor: palette.accentBright,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: palette.accent,
-    shadowOpacity: 0.5,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
   },
-  bottomStack: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.md },
+  playBtnTv: { width: 92, height: 92, borderRadius: 46 },
+  bottomStack: { padding: spacing.lg },
+  shelf: { borderRadius: radius.sheet },
+  shelfInner: { padding: spacing.lg, gap: spacing.md },
   seekRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-  trackHit: { flex: 1, paddingVertical: 12 },
-  track: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(244,242,237,0.22)",
-    overflow: "visible",
-    justifyContent: "center",
-  },
-  trackBuffered: { position: "absolute", left: 0, height: 4, borderRadius: 2, backgroundColor: "rgba(244,242,237,0.35)" },
-  trackElapsed: { position: "absolute", left: 0, height: 4, borderRadius: 2, backgroundColor: palette.accent },
+  timeLabel: { color: palette.textSecondary, fontVariant: ["tabular-nums"], minWidth: 52 },
+  trackHit: { flex: 1, paddingVertical: 12, justifyContent: "center", borderRadius: radius.sm },
+  track: { height: 4, borderRadius: 2, backgroundColor: chrome.trackDim, overflow: "visible" },
+  trackBuffered: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: 2, backgroundColor: chrome.trackBuffered },
+  trackElapsed: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: 2, backgroundColor: palette.cyan },
   thumb: {
     position: "absolute",
-    top: "50%",
-    marginTop: -7,
-    marginLeft: -7,
+    top: -5,
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: palette.accent,
-    shadowColor: "#000",
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 4,
+    marginLeft: -7,
+    backgroundColor: palette.textPrimary,
+    borderWidth: 2,
+    borderColor: palette.cyan,
   },
-  timeLabel: { color: palette.textPrimary, fontSize: 11, fontVariant: ["tabular-nums"], minWidth: 44, textAlign: "center" },
-  actionsRow: { flexDirection: "row", gap: spacing.sm, justifyContent: "center" },
+  actionsRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   pill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(10,12,16,0.62)",
+    backgroundColor: materials.secondary.fill,
+    borderWidth: 1,
+    borderColor: materials.secondary.border,
     borderRadius: radius.pill,
     paddingHorizontal: 14,
     paddingVertical: 8,
+    minHeight: 38,
   },
-  pillText: { color: palette.textPrimary, fontSize: 12, fontWeight: "700" },
-  focused: { borderWidth: 2, borderColor: palette.accent, borderRadius: radius.pill, backgroundColor: "rgba(240,120,85,0.18)" },
+  pillText: { color: palette.textSecondary, fontWeight: "600" },
 });

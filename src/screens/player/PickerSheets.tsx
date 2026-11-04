@@ -1,8 +1,10 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { BlurSurface } from "@/components/ui/BlurSurface";
+import { TvFocusable } from "@/components/tv/TvFocusable";
 import { CaptionTrack, StreamSource } from "@/types/provider";
 import type { AudioTrack, SubtitleTrack } from "expo-video";
 import React from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Slider from "@react-native-community/slider";
 
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
@@ -18,16 +20,52 @@ export function PickerSheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const isTV = Platform.isTV;
   return (
     <Pressable style={styles.sheetBackdrop} onPress={onClose}>
-      <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation?.()}>
-        <View style={styles.grabber} />
-        <Text style={styles.sheetTitle}>{title}</Text>
-        <ScrollView style={styles.sheetScroll} contentContainerStyle={{ gap: spacing.sm }} showsVerticalScrollIndicator={false}>
-          {children}
-        </ScrollView>
+      <Pressable onPress={(e) => e.stopPropagation?.()} style={isTV ? styles.sheetTv : undefined}>
+        <BlurSurface material="elevated" radius={radius.sheet} style={isTV ? styles.sheetTvPanel : styles.sheet}>
+          <View style={[styles.sheetBody, isTV && styles.sheetBodyTv]}>
+            <View style={styles.grabber} />
+            <Text style={[styles.sheetTitle, isTV && { fontSize: 30 }]}>{title}</Text>
+            <ScrollView style={styles.sheetScroll} contentContainerStyle={{ gap: spacing.sm }} showsVerticalScrollIndicator={false}>
+              {children}
+            </ScrollView>
+          </View>
+        </BlurSurface>
       </Pressable>
     </Pressable>
+  );
+}
+
+/** One selectable row. Focusable on TV, tappable on phones. */
+function OptionRow({
+  label,
+  meta,
+  active,
+  onPress,
+  hasPreferredFocus,
+}: {
+  label: string;
+  meta?: string | null;
+  active: boolean;
+  onPress: () => void;
+  hasPreferredFocus?: boolean;
+}) {
+  return (
+    <TvFocusable
+      onPress={onPress}
+      hasTVPreferredFocus={hasPreferredFocus}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={meta ? `${label}, ${meta}` : label}
+      style={[styles.option, active && styles.optionActive]}
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={styles.optionTitle}>{label}</Text>
+      </View>
+      {meta ? <Text style={styles.optionMeta}>{meta}</Text> : null}
+    </TvFocusable>
   );
 }
 
@@ -42,19 +80,17 @@ export function QualityOptions({
 }) {
   return (
     <>
-      {sources.map((s) => (
-        <Pressable
+      {sources.map((s, index) => (
+        <OptionRow
           key={s.url}
-          style={[styles.option, s.url === activeUri && styles.optionActive]}
+          label={s.resolution ?? s.format}
+          meta={[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format]
+            .filter(Boolean)
+            .join(" · ")}
+          active={s.url === activeUri}
+          hasPreferredFocus={index === 0}
           onPress={() => onPick(s)}
-        >
-          <Text style={styles.optionTitle}>{s.resolution ?? s.format}</Text>
-          <Text style={styles.optionMeta}>
-            {[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format]
-              .filter(Boolean)
-              .join(" · ")}
-          </Text>
-        </Pressable>
+        />
       ))}
       {sources.length === 0 ? <Text style={styles.optionMeta}>No full-length sources for this title.</Text> : null}
     </>
@@ -84,9 +120,7 @@ export function SubtitleOptions({
 }) {
   return (
     <>
-      <Pressable style={[styles.option, activeId === null && styles.optionActive]} onPress={onOff}>
-        <Text style={styles.optionTitle}>Off</Text>
-      </Pressable>
+      <OptionRow label="Off" active={activeId === null} hasPreferredFocus onPress={onOff} />
       {loading ? (
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color={palette.accent} />
@@ -94,13 +128,7 @@ export function SubtitleOptions({
         </View>
       ) : null}
       {(tracks ?? []).map((t) => (
-        <Pressable
-          key={t.id}
-          style={[styles.option, activeId === t.id && styles.optionActive]}
-          onPress={() => onPick(t)}
-        >
-          <Text style={styles.optionTitle}>{t.languageName}</Text>
-        </Pressable>
+        <OptionRow key={t.id} label={t.languageName} active={activeId === t.id} onPress={() => onPick(t)} />
       ))}
       {activeId !== null ? (
         <View style={{ marginTop: spacing.md }}>
@@ -112,8 +140,8 @@ export function SubtitleOptions({
             step={0.5}
             value={offset}
             minimumTrackTintColor={palette.accent}
-            maximumTrackTintColor="rgba(244,242,237,0.25)"
-            thumbTintColor={palette.accent}
+            maximumTrackTintColor={palette.surfaceRaised}
+            thumbTintColor={palette.cyan}
             onValueChange={onOffset}
           />
         </View>
@@ -121,11 +149,7 @@ export function SubtitleOptions({
       {error ? (
         <View style={{ gap: spacing.sm }}>
           <Text style={styles.errorText}>{error}</Text>
-          {onRetry ? (
-            <Pressable style={styles.option} onPress={onRetry}>
-              <Text style={styles.optionTitle}>Retry</Text>
-            </Pressable>
-          ) : null}
+          {onRetry ? <OptionRow label="Retry" active={false} onPress={onRetry} /> : null}
         </View>
       ) : null}
       {!loading && tracks !== null && tracks.length === 0 && !error ? (
@@ -145,15 +169,15 @@ export function SpeedOptions({
 }) {
   return (
     <>
-      {PLAYBACK_RATES.map((rate) => (
-        <Pressable
+      {PLAYBACK_RATES.map((rate, index) => (
+        <OptionRow
           key={rate}
-          style={[styles.option, rate === activeRate && styles.optionActive]}
+          label={rate === 1 ? "Normal" : `${rate}×`}
+          meta={rate === 1 ? "Default" : null}
+          active={rate === activeRate}
+          hasPreferredFocus={index === 0}
           onPress={() => onPick(rate)}
-        >
-          <Text style={styles.optionTitle}>{rate === 1 ? "Normal" : `${rate}×`}</Text>
-          {rate === 1 ? <Text style={styles.optionMeta}>Default</Text> : null}
-        </Pressable>
+        />
       ))}
     </>
   );
@@ -185,33 +209,26 @@ export function NativeTracksOptions({
         <View style={{ gap: spacing.sm }}>
           <Text style={styles.groupLabel}>Audio</Text>
           {audioTracks.map((t) => (
-            <Pressable
+            <OptionRow
               key={t.id}
-              style={[styles.option, t.id === activeAudioId && styles.optionActive]}
+              label={t.label || t.language || "Audio"}
+              active={t.id === activeAudioId}
               onPress={() => onPickAudio(t)}
-            >
-              <Text style={styles.optionTitle}>{t.label || t.language || "Audio"}</Text>
-            </Pressable>
+            />
           ))}
         </View>
       ) : null}
       {subtitleTracks.length > 0 ? (
         <View style={{ gap: spacing.sm }}>
           <Text style={styles.groupLabel}>Embedded subtitles</Text>
-          <Pressable
-            style={[styles.option, activeSubtitleId === null && styles.optionActive]}
-            onPress={() => onPickSubtitle(null)}
-          >
-            <Text style={styles.optionTitle}>Off</Text>
-          </Pressable>
+          <OptionRow label="Off" active={activeSubtitleId === null} onPress={() => onPickSubtitle(null)} />
           {subtitleTracks.map((t) => (
-            <Pressable
+            <OptionRow
               key={t.id}
-              style={[styles.option, t.id === activeSubtitleId && styles.optionActive]}
+              label={t.label || t.language || "Subtitles"}
+              active={t.id === activeSubtitleId}
               onPress={() => onPickSubtitle(t)}
-            >
-              <Text style={styles.optionTitle}>{t.label || t.language || "Subtitles"}</Text>
-            </Pressable>
+            />
           ))}
         </View>
       ) : null}
@@ -245,7 +262,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  optionActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.10)" },
+  optionActive: { borderColor: palette.cyan, backgroundColor: palette.accentSoft },
+  sheetBody: { padding: spacing.xl, gap: spacing.sm },
+  sheetBodyTv: { padding: spacing.xxl, gap: spacing.md, minWidth: 640 },
+  sheetTv: { flex: 1, justifyContent: "center", paddingHorizontal: spacing.huge },
+  sheetTvPanel: { maxHeight: "82%" },
   optionTitle: { color: palette.textPrimary, fontWeight: "700", fontSize: 15 },
   optionMeta: { color: palette.textMuted, fontSize: 12 },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm },

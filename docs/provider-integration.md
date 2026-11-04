@@ -79,6 +79,23 @@ module used by the app, verifier, and tests.
   re-resolves a fresh URL and tries another selectable source, then surfaces a
   clear error. `scripts/cdn-probe.mjs` can diagnose direct CDN behavior.
 
+## Caching
+
+`src/services/provider/cache.ts` wraps catalogue reads only:
+
+| Read | Fresh for | Stale-while-revalidate window |
+| --- | --- | --- |
+| `/home` | 90 s | 30 min |
+| `/detail/{slug}` | 10 min | 6 h |
+
+- Identical in-flight requests are de-duplicated (one network call, N awaiters).
+- Stale entries are served immediately while a background refresh runs; a failed
+  refresh keeps the stale value rather than blanking the screen.
+- **Search is never cached** — results must reflect the query the user just
+  typed.
+- **Stream URLs are never cached** — signed CDN URLs expire, so every play or
+  retry resolves fresh.
+
 ## Subtitles
 
 Caption tracks are fetched from the provider, then the selected track is

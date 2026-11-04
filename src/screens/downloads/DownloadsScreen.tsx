@@ -208,7 +208,13 @@ export function DownloadsScreen() {
         ) : null}
         <Poster uri={job.posterUrl} style={styles.poster} initials={initialsFor(job.title)} />
         <View style={{ flex: 1, gap: 4 }}>
-          <Text numberOfLines={1} style={styles.jobTitle}>{job.title}</Text>
+          <Pressable
+            onPress={() => navigation.navigate("Details", { detailPath: job.detailPath, subjectId: job.subjectId })}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${job.title}`}
+          >
+            <Text numberOfLines={1} style={styles.jobTitle}>{job.title}</Text>
+          </Pressable>
           <Text style={styles.jobMeta}>
             {[
               STATE_LABEL[job.state] ?? job.state,
@@ -247,9 +253,17 @@ export function DownloadsScreen() {
             ) : null}
             {job.state === "paused" || job.state === "failed" || job.state === "cancelled" ? (
               !selecting ? (
-                <Pressable style={styles.chipAction} onPress={() => downloadManager.resume(job.id)}>
+                <Pressable
+                  style={styles.chipAction}
+                  onPress={() => downloadManager.resume(job.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={job.state === "paused" ? "Resume download" : "Restart download from the beginning"}
+                >
                   <ArrowDownToLine size={13} color={palette.textPrimary} />
-                  <Text style={styles.chipLabel}>{job.state === "paused" ? "Resume" : "Retry"}</Text>
+                  {/* "Resume" is only used for a paused task the engine can
+                      actually continue. Failed jobs restart from a fresh URL,
+                      so they say "Restart" rather than promising byte resume. */}
+                  <Text style={styles.chipLabel}>{job.state === "paused" ? "Resume" : "Restart"}</Text>
                 </Pressable>
               ) : null
             ) : null}
@@ -350,8 +364,8 @@ export function DownloadsScreen() {
           <View style={styles.storageNote}>
             <AlertTriangle size={13} color={palette.textMuted} />
             <Text style={styles.storageNoteText}>
-              Transfer progress reflects real bytes received. Interrupted downloads restart safely; nothing is marked
-              complete until the file is verified.
+              Progress reflects real bytes received. A failed transfer restarts from a fresh link rather than resuming
+              mid-file, and nothing is marked complete until the file on disk is verified.
             </Text>
           </View>
         </ScrollView>
@@ -375,7 +389,7 @@ const styles = StyleSheet.create({
   batchBar: {
     marginHorizontal: spacing.xl,
     marginBottom: spacing.lg,
-    backgroundColor: "rgba(240,120,85,0.08)",
+    backgroundColor: palette.accentSoft,
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.card,

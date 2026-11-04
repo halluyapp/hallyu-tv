@@ -10,21 +10,26 @@ The only remote service is the public Zarhosting catalogue/stream API.
 ```text
 src/
   config/branding.ts        Hallyu TV identity
-  design-system/tokens.ts   "Obsidian Glass / Emberlight" visual tokens
+  design-system/           "Deep Blue Liquid Glass": tokens, gradients,
+                            materials, typography, motion, layout
   types/provider.ts         Provider contract types + runtime catalogue parsing
   types/library.ts          Local watchlist/progress types
-  services/provider/        Zarhosting client, adapter, stream normalization
+  services/provider/        Zarhosting client, cache, adapter, stream normalization
   services/localLibrary.ts  Device-local AsyncStorage library persistence
   services/downloads/       Direct download state machine (native + JS engines)
   services/subtitles/       SRT/VTT parsing + cue lookup
   state/LibraryContext.tsx  Local watchlist + continue watching
-  components/ui/            Glass UI kit and states
+  hooks/                    Device capability tier (high/standard/low),
+                            reduced motion, debounced value
+  components/ui/            Glass UI kit, blur surface, states
+  components/tv/            TV tile + focus surface
   navigation/               Mobile tabs + independent TV stack
-  screens/                  Onboarding, Home, Discover, Details, Player,
-                            Downloads, My Space, TV Home/Search
+  screens/                  Onboarding, Home, Discover, Search, Details, Player,
+                            Downloads, My Space and the TV variants
 plugins/
   withHallyuDownloader.js   Android system DownloadManager native module
-  withAndroidTvSupport.js   Leanback launcher + no-touchscreen manifest support
+  withAndroidTvSupport.js   Leanback launcher, no-touchscreen manifest support,
+                            and TV banner drawable generation
 scripts/                    verify-provider.mjs, cdn-probe.mjs, icon generator
 ```
 
@@ -33,13 +38,16 @@ scripts/                    verify-provider.mjs, cdn-probe.mjs, icon generator
 - Mobile and TV each run the same provider client and keep their own local
   library/downloads. There is no cross-device sync or pairing.
 - TV uses `Platform.isTV` to select a 10-foot navigator with remote-focusable
-  cards. The Android manifest plugin adds a leanback launcher category and
-  marks touchscreen as not required.
+  cards. The Android manifest plugin adds a leanback launcher category, marks
+  touchscreen as not required, and writes `res/drawable/tv_banner.png` that the
+  manifest's `android:banner` points at.
 - First-run mobile onboarding is stored locally. There is no welcome/auth gate.
 
 ## Data flow
 
-1. Catalogue/search/detail come from Zarhosting public endpoints.
+1. Catalogue/search/detail come from Zarhosting public endpoints. Catalogue
+   reads are cached stale-while-revalidate in memory and de-duplicated;
+   search results and stream URLs are never cached.
 2. Play/download resolves `GET /stream/{subject_id}?detail_path=&se=&ep=` with
    the required headers, normalizes sources, and selects a full-length source.
 3. Playback uses `expo-video` directly against the returned HTTPS CDN URL with
@@ -61,6 +69,8 @@ scripts/                    verify-provider.mjs, cdn-probe.mjs, icon generator
   else lowest verified full-length quality.
 - Downloads only accept progressive MP4 sources, never HLS/DASH manifests.
 - No secrets or environment variables are required to build or run the app.
+- Player state lives in a guard with a token; nothing touches the native player
+  after release, and the source object is never part of a hook dependency.
 
 ## CI
 

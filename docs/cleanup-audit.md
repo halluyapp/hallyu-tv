@@ -52,7 +52,9 @@ infrastructure while keeping every feature the active app still needs.
 ## Preserved / rebuilt
 
 - `expo-video` player (kept; playback recovery and scrubbing fixed)
-- Premium design system, UI kit, splash, icons, and branding
+- Premium design system, UI kit, splash, icons, and branding (later retinted
+  from the original "Obsidian Glass / Emberlight" palette to "Deep Blue Liquid
+  Glass" — see [design-system.md](design-system.md))
 - Zarhosting provider client/adapter/stream normalization (rewritten around the
   required `/stream/{subject_id}` contract)
 - Subtitle parsing (SRT + WebVTT) and overlay rendering
@@ -75,11 +77,13 @@ infrastructure while keeping every feature the active app still needs.
 ## Validation
 
 - `bun install` — lockfile updated, removed dependencies pruned
-- `bun test` — 85 tests pass (provider contract, streams, downloads, subtitles,
-  local library, TV manifest, cleanup regression)
-- `bun run typecheck` — passes with strict unused checks
-- `expo prebuild --platform android --no-install` — generates native project,
-  Kotlin downloader module, and leanback manifest entries
+- `bun test` — 126 tests pass across 12 files (provider contract, streams,
+  downloads, subtitles, local library, TV manifest, cleanup regression, design
+  system, player lifecycle, provider cache, resume semantics)
+- `bun run typecheck` — passes with strict unused checks (0 errors)
+- `expo prebuild --platform android --no-install` — generates the native
+  project, Kotlin downloader module, leanback manifest entries, and the
+  `res/drawable/tv_banner.png` TV banner
 - `expo export --platform android` — Metro bundle succeeds
 - Gradle release build runs in CI (`.github/workflows/apk-build.yml`); a local
   Gradle APK build requires JDK 17 + Android SDK, which are not installed in this

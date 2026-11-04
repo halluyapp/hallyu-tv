@@ -5,17 +5,18 @@ import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 /**
- * Hallyu TV SoundEngine — the "Emberlight" feedback layer.
+ * Hallyu TV SoundEngine — the interface feedback layer.
  *
- * Six bundled, generated tones cover the whole interface: glass taps, warm
- * confirmations, the cinematic play swell, tab ticks, soft errors, and the
- * download-complete bell. Sound is optional feedback, never the navigation
- * system: every cue has a visible equivalent, playback is fire-and-forget,
- * never throws, and is silently skipped when disabled or the provider has not
- * mounted. Haptics are a separate preference and skip TV devices entirely.
+ * Seven bundled, generated tones cover the whole interface: glass taps, warm
+ * confirmations, the cinematic play swell, tab ticks, soft errors, the
+ * download-complete bell, and the quiet TV focus tick. Sound is optional
+ * feedback, never the navigation system: every cue has a visible equivalent,
+ * playback is fire-and-forget, never throws, and is silently skipped when
+ * disabled or the provider has not mounted.
+ * Haptics are a separate preference and skip TV devices entirely.
  */
 
-export type SoundName = "tap" | "confirm" | "play" | "tab" | "error" | "complete";
+export type SoundName = "tap" | "confirm" | "play" | "tab" | "error" | "complete" | "focus";
 
 export interface PlayOptions {
   /** 0..1 multiplier applied on top of the tone's own loudness. */
@@ -29,6 +30,9 @@ const SOURCES: Record<SoundName, number> = {
   tab: require("../../../assets/sounds/tab_nav_tick.mp3"),
   error: require("../../../assets/sounds/soft_bass_error.mp3"),
   complete: require("../../../assets/sounds/success_bell_chime.mp3"),
+  // Focus movement reuses the quiet glass tap at a much lower loudness — no new
+  // asset, and d-pad scrolling never turns into a rattle of separate tones.
+  focus: require("../../../assets/sounds/soft_glass_tap.mp3"),
 };
 
 /** Per-tone loudness so quiet interface sounds stay quiet (focus < select). */
@@ -39,6 +43,7 @@ const BASE_VOLUME: Record<SoundName, number> = {
   tab: 0.4,
   error: 0.6,
   complete: 0.7,
+  focus: 0.22,
 };
 
 /** Which tones earn a haptic on handheld devices. */
