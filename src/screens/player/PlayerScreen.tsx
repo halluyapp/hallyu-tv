@@ -3,7 +3,7 @@ import { palette, spacing } from "@/design-system/tokens";
 import { useStage } from "@/hooks/useStage";
 import { pickAdaptiveSource, shouldDownshift } from "@/services/player/playbackPolicy";
 import { prefetchStreams, takePrefetched } from "@/services/provider/prefetch";
-import { AppState, PanResponder, Platform } from "react-native";
+import { AppState, PanResponder } from "react-native";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchCaptions, fetchCaptionText, resolveStreams } from "@/services/provider/adapter";
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
@@ -12,6 +12,7 @@ import { PlayerControls } from "./PlayerControls";
 import { NativeTracksOptions, PickerSheet, QualityOptions, SpeedOptions, SubtitleOptions } from "./PickerSheets";
 import { pickRecoverySource, qualityOptions, selectableSources, selectSource } from "@/services/provider/streams";
 import { cueAt, parseSubtitles, Cue } from "@/services/subtitles/srt";
+import { loadCues, pickPreferredTrack, saveCues, subtitleKey } from "@/services/subtitles/cache";
 import { useLibrary, COMPLETION_THRESHOLD } from "@/state/LibraryContext";
 import { useSound } from "@/services/sound/SoundContext";
 import { CaptionTrack, StreamSource } from "@/types/provider";
@@ -20,7 +21,7 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useEvent } from "expo";
 import { useKeepAwake } from "expo-keep-awake";
 import type { AudioTrack, SubtitleTrack } from "expo-video";
-import { useVideoPlayer, VideoView, VideoSource } from "expo-video";
+import { isPictureInPictureSupported, useVideoPlayer, VideoView, VideoSource } from "expo-video";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -45,13 +46,17 @@ export function PlayerScreen() {
   const { saveProgress } = useLibrary();
   const { play } = useSound();
   const insets = useSafeAreaInsets();
-  const isTV = Platform.isTV;
   const stage = useStage();
+  const isTV = stage.remote;
+  const videoRef = useRef<VideoView>(null);
   const chromeY = useRef(new Animated.Value(0)).current;
   const chromeFocusCount = useRef(0);
   const stallTimesRef = useRef<number[]>([]);
   const holdRateRef = useRef(1);
   const autoNextCancelledRef = useRef(false);
+  const autoSubtitleRef = useRef(false);
+  const subtitleOptOutRef = useRef(false);
+  const pressZoneRef = useRef<"left" | "center" | "right">("center");
   const lastTapRef = useRef<{ at: number; zone: "left" | "center" | "right" } | null>(null);
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,6 +64,15 @@ export function PlayerScreen() {
   const [gestureHint, setGestureHint] = useState<string | null>(null);
   const [subtitleScale, setSubtitleScale] = useState(1);
   const [nextCountdown, setNextCountdown] = useState<number | null>(null);
+  const [fitMode, setFitMode] = useState<"contain" | "cover">("contain");
+  const [locked, setLocked] = useState(false);
+  const [pipSupported] = useState(() => {
+    try {
+      return isPictureInPictureSupported();
+    } catch {
+      return false;
+    }
+  });
 
   useKeepAwake();
 
@@ -102,6 +116,7 @@ export function PlayerScreen() {
   const captionAbortRef = useRef<AbortController | null>(null);
   const captionSeqRef = useRef(0);
   const episodeKey = `${subjectId}|${detailPath}|${season}|${episode}`;
+  const cueKey = subtitleKey(subjectId, season, episode);
   const lastEpisodeKeyRef = useRef(episodeKey);
 
   const startAt = Math.max(0, resumeAt);
@@ -220,6 +235,8 @@ export function PlayerScreen() {
     recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
     lastSavedRef.current = 0;
     autoNextCancelledRef.current = false;
+    autoSubtitleRef.current = false;
+    subtitleOptOutRef.current = false;
     setNextCountdown(null);
     setAvailableSources(sources);
     setTracks(null);
@@ -410,14 +427,69 @@ export function PlayerScreen() {
         const parsed = parseSubtitles(body);
         if (parsed.length === 0) throw new Error("empty");
         setCues(parsed);
+        void saveCues(cueKey, parsed);
       } catch {
+        if (seq !== captionSeqRef.current) return;
+        // Offline, or a dead track URL: replay the cached cues instead.
+        const cached = await loadCues(cueKey);
+        if (cached && seq === captionSeqRef.current) {
+          setCues(cached);
+          return;
+        }
         if (seq !== captionSeqRef.current) return;
         setActiveTrack(null);
         setTracksError("This subtitle track could not be loaded.");
       }
     },
-    [],
+    [cueKey],
   );
+
+  // Subtitles arrive on their own: fetch the list, then pick a track.
+  useEffect(() => {
+    if (status !== "ready" || tracks !== null || tracksLoading) return;
+    if (subtitleOptOutRef.current) return;
+    void loadCaptions();
+  }, [status, tracks, tracksLoading, loadCaptions]);
+
+  useEffect(() => {
+    if (autoSubtitleRef.current || !tracks || tracks.length === 0) return;
+    if (subtitleOptOutRef.current || activeTrack || nativeSubtitleId) return;
+    autoSubtitleRef.current = true;
+    const preferred = pickPreferredTrack(tracks);
+    if (preferred) void selectTrack(preferred);
+  }, [tracks, activeTrack, nativeSubtitleId, selectTrack]);
+
+  // No tracks from the provider (offline, or a title that lost its captions):
+  // fall back to the subtitles cached from the last online playback.
+  useEffect(() => {
+    if (tracks === null || tracks.length > 0 || activeTrack) return;
+    if (subtitleOptOutRef.current) return;
+    let cancelled = false;
+    void (async () => {
+      const cached = await loadCues(cueKey);
+      if (cancelled || !cached) return;
+      setCues(cached);
+      setActiveTrack({ id: "cached", language: "cached", languageName: "Cached", url: "" });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tracks, activeTrack, cueKey]);
+
+  // Embedded tracks: choose the English one when the stream ships subtitles.
+  useEffect(() => {
+    if (subtitleOptOutRef.current || nativeSubtitleId || nativeSubtitleTracks.length === 0) return;
+    const preferred =
+      nativeSubtitleTracks.find((t) => /english|^en\b/i.test(`${t.language ?? ""} ${t.label ?? ""}`)) ??
+      nativeSubtitleTracks[0];
+    if (!preferred) return;
+    try {
+      player.subtitleTrack = preferred;
+      setNativeSubtitleId(preferred.id);
+    } catch {
+      // Embedded selection is best-effort.
+    }
+  }, [nativeSubtitleTracks, nativeSubtitleId, player]);
 
   const showControls = useCallback(() => {
     setControlsVisible(true);
@@ -465,18 +537,23 @@ export function PlayerScreen() {
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: (_event, state) => Math.abs(state.dx) > 10 || Math.abs(state.dy) > 10,
-        onPanResponderGrant: () => {
+        onPanResponderGrant: (event) => {
+          const x = event.nativeEvent.pageX;
+          pressZoneRef.current = x < stage.width * 0.34 ? "left" : x > stage.width * 0.66 ? "right" : "center";
           holdRateRef.current = rateRef.current;
           longPressActiveRef.current = false;
           if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = setTimeout(() => {
-            longPressActiveRef.current = true;
-            player.playbackRate = 2;
-            setRate(2);
-            setGestureHint("2× speed");
-          }, 480);
+          // Hold the right side for a temporary 2×; letting go returns to normal.
+          if (pressZoneRef.current === "right" && player.playing) {
+            longPressTimerRef.current = setTimeout(() => {
+              longPressActiveRef.current = true;
+              player.playbackRate = 2;
+              setRate(2);
+              setGestureHint("2× · release to resume");
+            }, 420);
+          }
         },
-        onPanResponderRelease: (event, state) => {
+        onPanResponderRelease: (_event, state) => {
           if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
           if (longPressActiveRef.current) {
             longPressActiveRef.current = false;
@@ -487,8 +564,8 @@ export function PlayerScreen() {
           }
           if (Math.abs(state.dx) > 12 || Math.abs(state.dy) > 12) return;
 
-          const x = event.nativeEvent.pageX;
-          const zone = x < stage.width * 0.32 ? "left" : x > stage.width * 0.68 ? "right" : "center";
+          // Use the zone captured on touch-down: release coordinates are unreliable on Android.
+          const zone = pressZoneRef.current;
           const now = Date.now();
           const last = lastTapRef.current;
 
@@ -514,10 +591,9 @@ export function PlayerScreen() {
 
           lastTapRef.current = { at: now, zone };
           if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
-          tapTimerRef.current = setTimeout(() => {
-            lastTapRef.current = null;
-            showControls();
-          }, 260);
+          tapTimerRef.current = null;
+          // First tap responds immediately; a second one upgrades it to a seek.
+          showControls();
         },
         onPanResponderTerminate: () => {
           if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
@@ -590,6 +666,7 @@ export function PlayerScreen() {
 
   useEffect(() => {
     if (nextCountdown === null) return;
+    if (!isPlaying) return;
     if (nextCountdown <= 0) {
       setNextCountdown(null);
       goNextEpisode();
@@ -597,7 +674,7 @@ export function PlayerScreen() {
     }
     const timer = setTimeout(() => setNextCountdown((value) => (value === null ? null : value - 1)), 1000);
     return () => clearTimeout(timer);
-  }, [nextCountdown, goNextEpisode]);
+  }, [nextCountdown, goNextEpisode, isPlaying]);
 
   const switchSource = useCallback(
     (next: StreamSource) => {
@@ -654,16 +731,24 @@ export function PlayerScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: isTV ? 0 : insets.top, paddingBottom: isTV ? 0 : insets.bottom }]}>
-      <View style={StyleSheet.absoluteFill} {...gesture.panHandlers}>
+      <View style={StyleSheet.absoluteFill} {...(locked || pipActive ? {} : gesture.panHandlers)}>
         <VideoView
+          ref={videoRef}
           player={player}
           style={StyleSheet.absoluteFill}
-          contentFit="contain"
+          contentFit={fitMode}
           nativeControls={false}
           allowsFullscreen={false}
           allowsPictureInPicture
-          onPictureInPictureStart={() => setPipActive(true)}
-          onPictureInPictureStop={() => setPipActive(false)}
+          startsPictureInPictureAutomatically={pipSupported && !stage.remote}
+          onPictureInPictureStart={() => {
+            setPipActive(true);
+            setControlsVisible(false);
+          }}
+          onPictureInPictureStop={() => {
+            setPipActive(false);
+            showControls();
+          }}
         />
       </View>
 
@@ -736,7 +821,21 @@ export function PlayerScreen() {
         </View>
       ) : null}
 
-      {controlsVisible && status !== "error" && !pipActive ? (
+      {locked ? (
+        <Pressable
+          style={styles.lockedPill}
+          onPress={() => {
+            setLocked(false);
+            showControls();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Unlock controls"
+        >
+          <Text style={styles.lockedText}>Locked · tap to unlock</Text>
+        </Pressable>
+      ) : null}
+
+      {controlsVisible && status !== "error" && !pipActive && !locked ? (
         <Animated.View
           style={[styles.chromeWrap, { opacity: controlsOpacity, transform: [{ translateY: chromeY }] }]}
           pointerEvents="box-none"
@@ -753,6 +852,8 @@ export function PlayerScreen() {
             subtitleLabel={nativeSubtitleId ? "Embedded" : activeTrack ? activeTrack.languageName : null}
             rate={rate}
             hasNextEpisode={Boolean(nextEpisode)}
+            fitMode={fitMode}
+            pipAvailable={pipSupported}
             stage={stage}
             onFocusChange={(focused) => {
               chromeFocusCount.current = focused ? 1 : 0;
@@ -780,6 +881,20 @@ export function PlayerScreen() {
               setSpeedPickerOpen(true);
             }}
             onNextEpisode={goNextEpisode}
+            onToggleFit={() => setFitMode((mode) => (mode === "contain" ? "cover" : "contain"))}
+            onPictureInPicture={() => {
+              if (!player.playing) player.play();
+              void videoRef.current?.startPictureInPicture().catch(() => {
+                setGestureHint("Picture-in-picture isn't available here");
+                setTimeout(() => setGestureHint(null), 1800);
+              });
+            }}
+            onLock={() => {
+              Animated.timing(controlsOpacity, { toValue: 0, duration: motion.fast, useNativeDriver: true }).start(() => {
+                setControlsVisible(false);
+                setLocked(true);
+              });
+            }}
           />
         </Animated.View>
       ) : null}
@@ -816,6 +931,7 @@ export function PlayerScreen() {
               setSubtitlePickerOpen(false);
             }}
             onOff={() => {
+              subtitleOptOutRef.current = true;
               if (nativeSubtitleId) pickNativeSubtitle(null);
               void selectTrack(null);
               setSubtitlePickerOpen(false);
@@ -889,6 +1005,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   gestureHintText: { color: palette.textPrimary, fontSize: 14, fontWeight: "700" },
+  lockedPill: {
+    position: "absolute",
+    alignSelf: "center",
+    backgroundColor: "rgba(8,10,13,0.82)",
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  lockedText: { color: palette.textPrimary, fontSize: 13, fontWeight: "700" },
   nextCard: {
     position: "absolute",
     minWidth: 280,

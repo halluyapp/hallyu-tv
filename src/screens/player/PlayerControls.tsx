@@ -1,6 +1,6 @@
 import type { Stage } from "@/design-system/stage";
 import { palette } from "@/design-system/tokens";
-import { ChevronLeft, Gauge, Pause, Play, RotateCcw, RotateCw, SkipForward, Subtitles, Wifi } from "lucide-react-native";
+import { ChevronLeft, Crop, Gauge, Lock, Pause, PictureInPicture2, Play, RotateCcw, RotateCw, SkipForward, Subtitles, Wifi } from "lucide-react-native";
 import React, { useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -34,6 +34,8 @@ export interface PlayerControlsProps {
   subtitleLabel: string | null;
   rate: number;
   hasNextEpisode: boolean;
+  fitMode: "contain" | "cover";
+  pipAvailable: boolean;
   stage: Stage;
   onFocusChange?: (focused: boolean) => void;
   onTogglePlay: () => void;
@@ -44,6 +46,9 @@ export interface PlayerControlsProps {
   onSubtitles: () => void;
   onSpeed: () => void;
   onNextEpisode: () => void;
+  onToggleFit: () => void;
+  onPictureInPicture: () => void;
+  onLock: () => void;
 }
 
 export function PlayerControls(props: PlayerControlsProps) {
@@ -140,6 +145,10 @@ export function PlayerControls(props: PlayerControlsProps) {
   const titleSize = Math.round(stage.bodySize + 3);
   const metaSize = Math.max(11, Math.round(stage.metaSize * 1.1));
   const pillSize = Math.max(12, Math.round(stage.bodySize * 0.95));
+  const pillPad = {
+    paddingHorizontal: stage.tier === "compact" ? 11 : 14,
+    paddingVertical: stage.tier === "compact" ? 7 : 9,
+  };
 
   return (
     <View style={styles.chrome} pointerEvents="box-none">
@@ -166,7 +175,19 @@ export function PlayerControls(props: PlayerControlsProps) {
             <Text style={[styles.episodeText, { fontSize: metaSize }]}>{props.episodeLabel}</Text>
           ) : null}
         </View>
-        <View style={styles.transportPill}>
+        <Pressable
+          onPress={props.onLock}
+          onFocus={() => handleFocus("lock")}
+          onBlur={handleBlur}
+          style={[styles.circleBtn, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Lock controls"
+        >
+          {rim("lock")}
+          <Lock size={Math.round(stage.u * 3)} color={palette.textSecondary} />
+        </Pressable>
+        <View style={[styles.transportPill, { paddingHorizontal: stage.tier === "compact" ? 9 : 12 }]}>
           {props.transportLabel === "Offline" ? null : <Wifi size={11} color={palette.textMuted} />}
           <Text style={[styles.transportText, { fontSize: metaSize }]}>{props.transportLabel}</Text>
         </View>
@@ -217,8 +238,8 @@ export function PlayerControls(props: PlayerControlsProps) {
 
       {/* Bottom: seek + actions */}
       <View style={[styles.bottomStack, { paddingHorizontal: stage.gutter, paddingBottom: stage.gutter }]}>
-        <View style={styles.seekRow}>
-          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 9) }]}>{fmt(shown)}</Text>
+        <View style={[styles.seekRow, { gap: stage.tier === "compact" ? 8 : 12 }]}>
+          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 7.5) }]}>{fmt(shown)}</Text>
           <View style={styles.trackHit} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)} {...pan.panHandlers}>
             <View style={styles.track}>
               <View style={[styles.trackBuffered, { width: `${bufferedPct * 100}%` }]} />
@@ -226,7 +247,7 @@ export function PlayerControls(props: PlayerControlsProps) {
               <View style={[styles.thumb, { left: `${pct * 100}%` }]} />
             </View>
           </View>
-          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 9) }]}>
+          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 7.5) }]}>
             {total > 0 ? fmt(total) : "--:--"}
           </Text>
         </View>
@@ -235,7 +256,7 @@ export function PlayerControls(props: PlayerControlsProps) {
             onPress={props.onSpeed}
             onFocus={() => handleFocus("speed")}
             onBlur={handleBlur}
-            style={styles.pill}
+            style={[styles.pill, pillPad]}
             accessibilityRole="button"
             accessibilityLabel="Playback speed"
           >
@@ -248,7 +269,7 @@ export function PlayerControls(props: PlayerControlsProps) {
             onPress={props.onSubtitles}
             onFocus={() => handleFocus("subs")}
             onBlur={handleBlur}
-            style={styles.pill}
+            style={[styles.pill, pillPad]}
             accessibilityRole="button"
             accessibilityLabel="Subtitles and audio"
           >
@@ -262,7 +283,7 @@ export function PlayerControls(props: PlayerControlsProps) {
             onPress={props.onQuality}
             onFocus={() => handleFocus("quality")}
             onBlur={handleBlur}
-            style={styles.pill}
+            style={[styles.pill, pillPad]}
             accessibilityRole="button"
             accessibilityLabel="Quality"
           >
@@ -270,12 +291,40 @@ export function PlayerControls(props: PlayerControlsProps) {
             <Gauge size={Math.round(stage.u * 2.6)} color={palette.textSecondary} />
             <Text style={[styles.pillText, { fontSize: pillSize }]}>{props.quality ?? "Auto"}</Text>
           </Pressable>
+          <Pressable
+            onPress={props.onToggleFit}
+            onFocus={() => handleFocus("fit")}
+            onBlur={handleBlur}
+            style={[styles.pill, pillPad]}
+            accessibilityRole="button"
+            accessibilityLabel={props.fitMode === "cover" ? "Switch to fit screen" : "Crop to fill screen"}
+          >
+            {rim("fit")}
+            <Crop size={Math.round(stage.u * 2.6)} color={props.fitMode === "cover" ? palette.accent : palette.textSecondary} />
+            <Text style={[styles.pillText, { fontSize: pillSize }, props.fitMode === "cover" && { color: palette.accent }]}>
+              {props.fitMode === "cover" ? "Filled" : "Fit"}
+            </Text>
+          </Pressable>
+          {props.pipAvailable ? (
+            <Pressable
+              onPress={props.onPictureInPicture}
+              onFocus={() => handleFocus("pip")}
+              onBlur={handleBlur}
+              style={[styles.pill, pillPad]}
+              accessibilityRole="button"
+              accessibilityLabel="Picture in picture"
+            >
+              {rim("pip")}
+              <PictureInPicture2 size={Math.round(stage.u * 2.6)} color={palette.textSecondary} />
+              <Text style={[styles.pillText, { fontSize: pillSize }]}>PiP</Text>
+            </Pressable>
+          ) : null}
           {props.hasNextEpisode ? (
             <Pressable
               onPress={props.onNextEpisode}
               onFocus={() => handleFocus("next")}
               onBlur={handleBlur}
-              style={styles.pill}
+              style={[styles.pill, pillPad]}
               accessibilityRole="button"
               accessibilityLabel="Next episode"
             >

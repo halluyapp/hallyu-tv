@@ -1,4 +1,5 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { useStage } from "@/hooks/useStage";
 import { CaptionTrack, StreamSource } from "@/types/provider";
 import type { AudioTrack, SubtitleTrack } from "expo-video";
 import React from "react";
@@ -18,11 +19,15 @@ export function PickerSheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const stage = useStage();
   return (
     <Pressable style={styles.sheetBackdrop} onPress={onClose}>
-      <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation?.()}>
-        <View style={styles.grabber} />
-        <Text style={styles.sheetTitle}>{title}</Text>
+      <Pressable
+        style={[styles.sheet, { padding: stage.gutter, maxHeight: stage.tier === "stage" ? "70%" : "80%" }]}
+        onPress={(e) => e.stopPropagation?.()}
+      >
+        <View style={[styles.grabber, { width: Math.max(40, stage.controlSize * 0.5) }]} />
+        <Text style={[styles.sheetTitle, { fontSize: Math.max(20, stage.titleSize * 0.7) }]}>{title}</Text>
         <ScrollView style={styles.sheetScroll} contentContainerStyle={{ gap: spacing.sm }} showsVerticalScrollIndicator={false}>
           {children}
         </ScrollView>
@@ -40,6 +45,7 @@ export function QualityOptions({
   activeUri: string | null;
   onPick: (s: StreamSource) => void;
 }) {
+  const stage = useStage();
   return (
     <>
       {sources.map((s) => (
@@ -48,15 +54,15 @@ export function QualityOptions({
           style={[styles.option, s.url === activeUri && styles.optionActive]}
           onPress={() => onPick(s)}
         >
-          <Text style={styles.optionTitle}>{s.resolution ?? s.format}</Text>
-          <Text style={styles.optionMeta}>
+          <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{s.resolution ?? s.format}</Text>
+          <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>
             {[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format]
               .filter(Boolean)
               .join(" · ")}
           </Text>
         </Pressable>
       ))}
-      {sources.length === 0 ? <Text style={styles.optionMeta}>No full-length sources for this title.</Text> : null}
+      {sources.length === 0 ? <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>No full-length sources for this title.</Text> : null}
     </>
   );
 }
@@ -86,15 +92,16 @@ export function SubtitleOptions({
   onOff: () => void;
   onRetry?: () => void;
 }) {
+  const stage = useStage();
   return (
     <>
       <Pressable style={[styles.option, activeId === null && styles.optionActive]} onPress={onOff}>
-        <Text style={styles.optionTitle}>Off</Text>
+        <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>Off</Text>
       </Pressable>
       {loading ? (
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color={palette.accent} />
-          <Text style={styles.optionMeta}>Loading subtitle tracks…</Text>
+          <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Loading subtitle tracks…</Text>
         </View>
       ) : null}
       {(tracks ?? []).map((t) => (
@@ -103,12 +110,12 @@ export function SubtitleOptions({
           style={[styles.option, activeId === t.id && styles.optionActive]}
           onPress={() => onPick(t)}
         >
-          <Text style={styles.optionTitle}>{t.languageName}</Text>
+          <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.languageName}</Text>
         </Pressable>
       ))}
       {activeId !== null ? (
         <View style={{ marginTop: spacing.md }}>
-          <Text style={styles.optionMeta}>Subtitle delay: {offset.toFixed(1)}s</Text>
+          <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Subtitle delay: {offset.toFixed(1)}s</Text>
           <Slider
             style={{ height: 32, marginTop: spacing.xs }}
             minimumValue={-5}
@@ -121,7 +128,7 @@ export function SubtitleOptions({
             onValueChange={onOffset}
           />
           <View style={styles.sizeRow}>
-            <Text style={styles.optionMeta}>Text size</Text>
+            <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Text size</Text>
             <View style={{ flexDirection: "row", gap: spacing.sm }}>
               {[0.85, 1, 1.15, 1.3].map((value) => (
                 <Pressable
@@ -143,13 +150,13 @@ export function SubtitleOptions({
           <Text style={styles.errorText}>{error}</Text>
           {onRetry ? (
             <Pressable style={styles.option} onPress={onRetry}>
-              <Text style={styles.optionTitle}>Retry</Text>
+              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>Retry</Text>
             </Pressable>
           ) : null}
         </View>
       ) : null}
       {!loading && tracks !== null && tracks.length === 0 && !error ? (
-        <Text style={styles.optionMeta}>No caption tracks were returned for this title.</Text>
+        <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>No caption tracks were returned for this title.</Text>
       ) : null}
     </>
   );
@@ -163,6 +170,7 @@ export function SpeedOptions({
   activeRate: number;
   onPick: (rate: number) => void;
 }) {
+  const stage = useStage();
   return (
     <>
       {PLAYBACK_RATES.map((rate) => (
@@ -171,8 +179,8 @@ export function SpeedOptions({
           style={[styles.option, rate === activeRate && styles.optionActive]}
           onPress={() => onPick(rate)}
         >
-          <Text style={styles.optionTitle}>{rate === 1 ? "Normal" : `${rate}×`}</Text>
-          {rate === 1 ? <Text style={styles.optionMeta}>Default</Text> : null}
+          <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{rate === 1 ? "Normal" : `${rate}×`}</Text>
+          {rate === 1 ? <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Default</Text> : null}
         </Pressable>
       ))}
     </>
@@ -198,6 +206,7 @@ export function NativeTracksOptions({
   onPickAudio: (t: AudioTrack | null) => void;
   onPickSubtitle: (t: SubtitleTrack | null) => void;
 }) {
+  const stage = useStage();
   if (audioTracks.length === 0 && subtitleTracks.length === 0) return null;
   return (
     <>
@@ -210,7 +219,7 @@ export function NativeTracksOptions({
               style={[styles.option, t.id === activeAudioId && styles.optionActive]}
               onPress={() => onPickAudio(t)}
             >
-              <Text style={styles.optionTitle}>{t.label || t.language || "Audio"}</Text>
+              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.label || t.language || "Audio"}</Text>
             </Pressable>
           ))}
         </View>
@@ -222,7 +231,7 @@ export function NativeTracksOptions({
             style={[styles.option, activeSubtitleId === null && styles.optionActive]}
             onPress={() => onPickSubtitle(null)}
           >
-            <Text style={styles.optionTitle}>Off</Text>
+            <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>Off</Text>
           </Pressable>
           {subtitleTracks.map((t) => (
             <Pressable
@@ -230,7 +239,7 @@ export function NativeTracksOptions({
               style={[styles.option, t.id === activeSubtitleId && styles.optionActive]}
               onPress={() => onPickSubtitle(t)}
             >
-              <Text style={styles.optionTitle}>{t.label || t.language || "Subtitles"}</Text>
+              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.label || t.language || "Subtitles"}</Text>
             </Pressable>
           ))}
         </View>
