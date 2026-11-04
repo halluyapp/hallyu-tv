@@ -1,42 +1,27 @@
 import { Button } from "@/components/ui/Button";
-import { useGate } from "@/components/auth/GateProvider";
-import { EmptyState, ErrorState } from "@/components/ui/States";
+import { ErrorState } from "@/components/ui/States";
 import { SkeletonFill } from "@/components/ui/PosterCard";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
-import { useAuth } from "@/hooks/useAuth";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
-import { selectSource } from "@/services/provider/streams";
+import { selectDownloadSource } from "@/services/provider/streams";
 import { downloadManager } from "@/services/downloads/manager";
 import { useLibrary } from "@/state/LibraryContext";
 import { ProviderError, SeasonInfo, TitleDetail } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Image,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight } from "lucide-react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/** Paired TVs authenticate with a device session, not a user login — the guest gate is phone-only. */
-const IS_TV = Platform.isTV;
-
 export function DetailsScreen() {
   const route = useRoute<RouteProp<RootStackParamList, "Details">>();
   const navigation = useNavigation<Nav>();
-  const { detailPath, subjectId } = route.params;
-  const { user } = useAuth();
-  const { showGate } = useGate();
-  const { inWatchlist, toggleWatchlist, resumeFor, progress } = useLibrary();
+  const { detailPath } = route.params;
+  const { inWatchlist, toggleWatchlist, resumeFor, latestFor, loading: libraryLoading } = useLibrary();
   const insets = useSafeAreaInsets();
 
   const [detail, setDetail] = useState<TitleDetail | null>(null);
@@ -46,57 +31,59 @@ export function DetailsScreen() {
   const [episode, setEpisode] = useState(1);
   const [resolving, setResolving] = useState(false);
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const initializedRef = useRef(false);
 
-  useEffect(() => {
-    let stale = false;
+  const load = useCallback(async () => {
     setError(null);
     setDetail(null);
-    fetchDetail(detailPath)
-      .then((d) => {
-        if (stale) return;
-        setDetail(d);
-        const first = d.seasons[0] ?? null;
-        setSeason(first);
-        setEpisode(1);
-      })
-      .catch((err) => !stale && setError(err instanceof ProviderError ? err.message : "Could not load this title."));
-    return () => {
-      stale = true;
-    };
+    initializedRef.current = false;
+    try {
+      const d = await fetchDetail(detailPath);
+      setDetail(d);
+    } catch (err) {
+      setError(err instanceof ProviderError ? err.message : "Could not load this title.");
+    }
   }, [detailPath]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Once detail + local library are ready, resume the latest watched episode
+  // (or the first episode) without overwriting later user selections.
+  useEffect(() => {
+    if (!detail || libraryLoading || initializedRef.current) return;
+    initializedRef.current = true;
+    if (detail.mediaType !== "series") {
+      setSeason(null);
+      setEpisode(1);
+      return;
+    }
+    const latest = latestFor(detail.subjectId);
+    const matched = latest?.season_number != null ? detail.seasons.find((s) => s.season === latest.season_number) : null;
+    const first = matched ?? detail.seasons[0] ?? null;
+    setSeason(first);
+    const ep = matched && latest?.episode_number != null ? latest.episode_number : 1;
+    setEpisode(first ? Math.min(Math.max(1, ep), first.maxEp) : 1);
+  }, [detail, libraryLoading, latestFor]);
 
   const saved = detail ? inWatchlist(detail.subjectId) : false;
   const currentSeason = detail?.mediaType === "series" ? season?.season ?? 1 : null;
-  const selectedSeason = season?.season ?? null;
 
   const resume = useMemo(() => {
     if (!detail) return null;
     return resumeFor(detail.subjectId, currentSeason, currentSeason ? episode : null);
-  }, [detail, resumeFor, currentSeason, episode, progress]);
+  }, [detail, resumeFor, currentSeason, episode]);
 
-  /** Season/episode are passed explicitly — never read from state after a setState. */
   const play = useCallback(
     async (opts: { resumeAt: number; season?: number | null; episode?: number | null }) => {
-      if (!detail) return;
-      if (!user && !IS_TV) {
-        // Guest gate: explain, sign in, return to this exact title. Playback is
-        // never auto-started — the user re-taps Play.
-        showGate({
-          title: "Sign in to watch",
-          message: `Watching “${detail.title}” needs an account so your progress and library stay with you.`,
-        });
-        return;
-      }
+      if (!detail || resolving) return;
       const selSeason = opts.season !== undefined ? opts.season : currentSeason;
       const selEpisode = opts.episode !== undefined ? opts.episode : currentSeason ? episode : 0;
       setResolving(true);
       setResolutionError(null);
       try {
         const res = await resolveStreams(detail.subjectId, detail.detailPath, selSeason ?? 0, selEpisode ?? 0);
-        if (res.sources.length === 0) {
-          setResolutionError(res.note ?? "No stream is available for this selection.");
-          return;
-        }
         navigation.navigate("Player", {
           subjectId: detail.subjectId,
           detailPath: detail.detailPath,
@@ -109,42 +96,26 @@ export function DetailsScreen() {
           sources: res.sources,
         });
       } catch (err) {
-        const message =
-          err instanceof ProviderError
-            ? err.message
-            : "Could not start playback. The provider may be busy — try again shortly.";
-        setResolutionError(message);
+        setResolutionError(err instanceof ProviderError ? err.message : "Could not start playback. The provider may be busy — try again shortly.");
       } finally {
         setResolving(false);
       }
     },
-    [detail, user, showGate, navigation, currentSeason, episode],
+    [detail, resolving, navigation, currentSeason, episode],
   );
 
-  const startDownload = useCallback((opts: { season?: number | null; episode?: number | null }) => {
-    if (!detail) return;
-    if (!user && !IS_TV) {
-      showGate({
-        title: "Sign in to download",
-        message: "Downloads are tied to your account and live only on this device.",
-        pendingAction: () => startDownloadAfterAuth(),
-      });
-      return;
-    }
-    startDownloadAfterAuth();
-
-    async function startDownloadAfterAuth() {
-      if (!detail) return;
+  const startDownload = useCallback(
+    async (opts: { season?: number | null; episode?: number | null }) => {
+      if (!detail || resolving) return;
       const selSeason = opts.season !== undefined ? opts.season : currentSeason;
       const selEpisode = opts.episode !== undefined ? opts.episode : currentSeason ? episode : 0;
       setResolving(true);
       setResolutionError(null);
       try {
         const res = await resolveStreams(detail.subjectId, detail.detailPath, selSeason ?? 0, selEpisode ?? 0);
-        // Mandatory default-quality rule: verified full-length 360p, else lowest full-length.
-        const pick = selectSource(res.sources, null);
+        const pick = selectDownloadSource(res.sources, null);
         if (!pick) {
-          setResolutionError("No downloadable source was returned for this selection.");
+          setResolutionError("No downloadable MP4 source was returned for this selection.");
           return;
         }
         await downloadManager.enqueue({
@@ -158,36 +129,35 @@ export function DetailsScreen() {
           source: pick,
           expectedBytes: pick.sizeBytes,
         });
-        navigation.navigate("Main");
+        if (Platform.isTV) navigation.navigate("TvDownloads");
+        else navigation.navigate("Main");
       } catch (err) {
         setResolutionError(err instanceof ProviderError ? err.message : "Could not start the download.");
       } finally {
         setResolving(false);
       }
-    }
-  }, [detail, user, showGate, navigation, currentSeason, episode]);
+    },
+    [detail, resolving, navigation, currentSeason, episode],
+  );
 
   const onWatchlist = useCallback(() => {
     if (!detail) return;
-    const item = {
+    void toggleWatchlist({
       subject_id: detail.subjectId,
       detail_path: detail.detailPath,
       media_type: detail.mediaType,
       title: detail.title,
       poster_url: detail.posterUrl,
-    };
-    if (!user) {
-      showGate({
-        title: "Sign in to save titles",
-        message: "Your watchlist follows your account across every device you sign in on.",
-        pendingAction: () => void toggleWatchlist(item),
-      });
-      return;
-    }
-    void toggleWatchlist(item);
-  }, [detail, user, showGate, toggleWatchlist]);
+    });
+  }, [detail, toggleWatchlist]);
 
-  if (error) return <View style={styles.root}><ErrorState message={error} onRetry={() => { setError(null); fetchDetail(detailPath).then(setDetail).catch(() => setError("Could not load this title.")); }} /></View>;
+  if (error) {
+    return (
+      <View style={styles.root}>
+        <ErrorState message={error} onRetry={() => void load()} />
+      </View>
+    );
+  }
   if (!detail) return <View style={styles.root}><SkeletonFill /></View>;
 
   const synopsis = detail.description ?? "No synopsis was provided for this title.";
@@ -218,7 +188,7 @@ export function DetailsScreen() {
 
         <View style={styles.actionsRow}>
           <Button
-            label={resolving ? "Preparing…" : resume ? "Resume" : "Play"}
+            label={resolving ? "Preparing…" : resume && !resume.completed ? "Resume" : "Play"}
             icon={<Play size={16} color="#1A0E0A" fill="#1A0E0A" />}
             loading={resolving}
             onPress={() => void play({ resumeAt: resume && !resume.completed ? resume.position_seconds : 0 })}
@@ -227,7 +197,7 @@ export function DetailsScreen() {
           <Pressable style={styles.iconAction} onPress={onWatchlist}>
             {saved ? <BookmarkCheck size={20} color={palette.accent} /> : <Bookmark size={20} color={palette.textSecondary} />}
           </Pressable>
-          <Pressable style={styles.iconAction} onPress={() => startDownload({})}>
+          <Pressable style={styles.iconAction} onPress={() => void startDownload({})} disabled={resolving}>
             <Download size={20} color={palette.textSecondary} />
           </Pressable>
         </View>
@@ -245,9 +215,7 @@ export function DetailsScreen() {
         ) : null}
 
         <Pressable onPress={() => setExpanded((e) => !e)}>
-          <Text numberOfLines={expanded ? undefined : 3} style={styles.synopsis}>
-            {synopsis}
-          </Text>
+          <Text numberOfLines={expanded ? undefined : 3} style={styles.synopsis}>{synopsis}</Text>
           <Text style={styles.expandHint}>{expanded ? "Show less" : "More"}</Text>
         </Pressable>
 
@@ -275,14 +243,13 @@ export function DetailsScreen() {
             <View style={{ gap: spacing.sm }}>
               {episodes.map((ep) => {
                 const p = resumeFor(detail.subjectId, season!.season, ep);
-                const watched = p ? (p.completed || p.position_seconds / Math.max(p.duration_seconds, 1) > 0.9) : false;
+                const watched = p ? p.completed || p.position_seconds / Math.max(p.duration_seconds, 1) > 0.9 : false;
                 return (
                   <Pressable
                     key={ep}
-                    style={[styles.episodeRow, season?.season === selectedSeason && episode === ep && styles.episodeRowActive]}
+                    style={[styles.episodeRow, episode === ep && styles.episodeRowActive]}
                     onPress={() => {
                       setEpisode(ep);
-                      // Selection is passed explicitly so a fast tap can never start the previous episode.
                       void play({ resumeAt: p && !p.completed ? p.position_seconds : 0, season: season?.season ?? null, episode: ep });
                     }}
                   >
@@ -290,9 +257,7 @@ export function DetailsScreen() {
                       <Text style={styles.episodeNumberText}>{ep}</Text>
                     </View>
                     <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={styles.episodeTitle} numberOfLines={1}>
-                        {`Episode ${ep}`}
-                      </Text>
+                      <Text style={styles.episodeTitle} numberOfLines={1}>{`Episode ${ep}`}</Text>
                       <Text style={styles.episodeMeta}>
                         {watched ? "Watched" : p ? `Watching · ${Math.floor(p.position_seconds / 60)} min in` : "Ready to play"}
                       </Text>
@@ -326,7 +291,7 @@ export function DetailsScreen() {
 
         <View style={[styles.deviceHint, { marginTop: spacing.xl }]}>
           <Monitor size={14} color={palette.textMuted} />
-          <Text style={styles.deviceHintText}>Progress, watchlist and downloads stay with your account.</Text>
+          <Text style={styles.deviceHintText}>Progress, watchlist and downloads are stored on this device.</Text>
         </View>
       </View>
     </ScrollView>

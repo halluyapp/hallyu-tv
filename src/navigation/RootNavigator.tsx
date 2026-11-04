@@ -5,11 +5,8 @@ import { HomeScreen } from "@/screens/home/HomeScreen";
 import { DiscoverScreen } from "@/screens/discover/DiscoverScreen";
 import { MySpaceScreen } from "@/screens/mine/MySpaceScreen";
 import { PlayerScreen } from "@/screens/player/PlayerScreen";
-import { DevicesScreen } from "@/screens/devices/DevicesScreen";
-import { TvPairScreen } from "@/screens/tv/TvPairScreen";
 import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
 import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
-import { WelcomeScreen } from "@/screens/auth/WelcomeScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -20,7 +17,6 @@ import type { StreamSource } from "@/types/provider";
 
 export type RootStackParamList = {
   Onboarding: undefined;
-  Welcome: undefined;
   Main: undefined;
   Details: { detailPath: string; subjectId: string };
   Player: {
@@ -34,10 +30,9 @@ export type RootStackParamList = {
     resumeAt: number;
     sources: StreamSource[];
   };
-  Devices: undefined;
-  TvPairing: undefined;
   TvHome: undefined;
   TvSearch: undefined;
+  TvDownloads: undefined;
 };
 
 export type TabParamList = {
@@ -73,8 +68,7 @@ function MainTabs() {
         tabBarActiveTintColor: palette.accent,
         tabBarInactiveTintColor: palette.textMuted,
         tabBarLabelStyle: { fontSize: 10, fontWeight: "600", letterSpacing: 0.3 },
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        tabBarIcon: ({ color, size }) => {
+        tabBarIcon: ({ color }) => {
           const Icon = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
           return <Icon color={color} size={21} strokeWidth={1.8} />;
         },
@@ -89,16 +83,16 @@ function MainTabs() {
 }
 
 /**
- * TV devices get their own pairing-first stack; phones/tablets get the full
- * mobile experience.
+ * TV devices get an independent 10-foot stack; phones/tablets get the mobile
+ * tabs. Neither requires an account, pairing, or another device.
  */
 export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
   if (Platform.isTV) {
     return (
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
-        <Stack.Screen name="TvPairing" component={TvPairScreen} />
         <Stack.Screen name="TvHome" component={TvHomeScreen} />
         <Stack.Screen name="TvSearch" component={TvSearchScreen} />
+        <Stack.Screen name="TvDownloads" component={DownloadsScreen} />
         <Stack.Screen name="Details" component={DetailsScreen} />
         <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "all" }} />
       </Stack.Navigator>
@@ -106,29 +100,22 @@ export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
   }
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
-      {showOnboarding && (
+      {showOnboarding ? (
         <Stack.Screen
           name="Onboarding"
           children={({ navigation }) => (
             <OnboardingScreen
               onDone={() => {
                 void completeOnboarding();
-                navigation.replace("Welcome");
+                navigation.replace("Main");
               }}
             />
           )}
         />
-      )}
-      <Stack.Screen
-        name="Welcome"
-        children={({ navigation }) => (
-          <WelcomeScreen onExploreAsGuest={() => navigation.replace("Main")} />
-        )}
-      />
+      ) : null}
       <Stack.Screen name="Main" component={MainTabs} />
       <Stack.Screen name="Details" component={DetailsScreen} />
       <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "all" }} />
-      <Stack.Screen name="Devices" component={DevicesScreen} />
     </Stack.Navigator>
   );
 }

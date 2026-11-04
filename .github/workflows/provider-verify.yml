@@ -1,0 +1,28 @@
+name: Provider Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Daily drift check on the public Zarhosting API contract.
+    - cron: "0 6 * * *"
+
+jobs:
+  verify:
+    name: Zarhosting API contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify provider API contract (app normalization rules)
+        run: bun run verify:provider

@@ -1,12 +1,11 @@
-import { useGate } from "@/components/auth/GateProvider";
-import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/States";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
-import { useAuth } from "@/hooks/useAuth";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { downloadManager } from "@/services/downloads/manager";
 import { absolutePathFor } from "@/services/downloads/fs";
+import { localFileUri } from "@/services/downloads/paths";
 import { DownloadJob } from "@/services/downloads/types";
+import { useLibrary } from "@/state/LibraryContext";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useEffect, useState } from "react";
@@ -23,17 +22,19 @@ const STATE_LABEL: Record<string, string> = {
   downloading: "Downloading",
   paused: "Paused",
   waiting_for_network: "Waiting for network",
-  retrying: "Retrying…",
   verifying: "Finishing…",
   completed: "Ready offline",
   failed: "Failed",
   cancelled: "Cancelled",
 };
 
+function offlineUri(job: DownloadJob): string {
+  return job.engine === "native" ? localFileUri(job.finalPath) : absolutePathFor(job.finalPath);
+}
+
 export function DownloadsScreen() {
-  const { user } = useAuth();
-  const { showGate } = useGate();
   const navigation = useNavigation<Nav>();
+  const { resumeFor } = useLibrary();
   const insets = useSafeAreaInsets();
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
 
@@ -42,25 +43,41 @@ export function DownloadsScreen() {
     return downloadManager.subscribe(setJobs);
   }, []);
 
-  useEffect(() => {
-    if (!user) {
-      showGate({
-        title: "Sign in to download",
-        message: "Downloads are account-tied and stored only on this device — nothing is uploaded.",
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const confirmDelete = (job: DownloadJob) =>
     Alert.alert("Delete download?", `“${job.title}” will be removed from this device.`, [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: () => void downloadManager.delete(job.id) },
     ]);
 
+  const playOffline = (job: DownloadJob) => {
+    const p = resumeFor(job.subjectId, job.season || null, job.episode || null);
+    navigation.navigate("Player", {
+      subjectId: job.subjectId,
+      detailPath: job.detailPath,
+      title: job.title,
+      posterUrl: job.posterUrl,
+      mediaType: job.mediaType,
+      season: job.season,
+      episode: job.episode,
+      resumeAt: p && !p.completed ? p.position_seconds : 0,
+      sources: [{
+        url: offlineUri(job),
+        resolution: "Offline",
+        qualityValue: null,
+        format: "MP4",
+        codec: job.source.codec,
+        sizeBytes: job.totalBytes,
+        durationSeconds: null,
+        sourceLabel: "Offline",
+        preview: false,
+        verifiedFullLength: true,
+      }],
+    });
+  };
+
   const renderJob = (job: DownloadJob) => {
     const pct = job.totalBytes && job.totalBytes > 0 ? Math.min(100, (job.receivedBytes / job.totalBytes) * 100) : null;
-    const isActive = job.state === "downloading" || job.state === "connecting" || job.state === "queued" || job.state === "verifying";
+    const isActive = job.state === "downloading" || job.state === "connecting" || job.state === "queued" || job.state === "verifying" || job.state === "resolving";
     return (
       <View key={job.id} style={styles.job}>
         {job.posterUrl ? (
@@ -78,7 +95,7 @@ export function DownloadsScreen() {
               job.totalBytes ? `${(job.receivedBytes / 1_048_576).toFixed(0)} / ${(job.totalBytes / 1_048_576).toFixed(0)} MB` : `${(job.receivedBytes / 1_048_576).toFixed(0)} MB`,
             ].filter(Boolean).join(" · ")}
           </Text>
-          {job.state === "failed" && job.failureReason ? (
+          {(job.state === "failed" || job.state === "waiting_for_network") && job.failureReason ? (
             <Text style={styles.failReason}>{job.failureReason}</Text>
           ) : null}
           {isActive || job.state === "paused" ? (
@@ -88,30 +105,7 @@ export function DownloadsScreen() {
           ) : null}
           <View style={styles.jobActions}>
             {job.state === "completed" ? (
-              <Pressable style={styles.chipAction} onPress={() => navigation.navigate("Player", {
-                subjectId: job.subjectId,
-                detailPath: job.detailPath,
-                title: job.title,
-                posterUrl: job.posterUrl,
-                mediaType: job.mediaType,
-                season: job.season,
-                episode: job.episode,
-                resumeAt: 0,
-                sources: [{
-                  // Native-engine files live outside the JS document dir and
-                  // are stored as absolute paths; they still need file:// here.
-                  url: job.engine === "native" ? `file://${job.finalPath}` : absolutePathFor(job.finalPath),
-                  resolution: "Offline",
-                  qualityValue: null,
-                  format: "MP4",
-                  codec: job.source.codec,
-                  sizeBytes: job.totalBytes,
-                  durationSeconds: null,
-                  sourceLabel: "Offline",
-                  preview: false,
-                  verifiedFullLength: true,
-                }],
-              })}>
+              <Pressable style={styles.chipAction} onPress={() => playOffline(job)}>
                 <PlayIcon size={13} color={palette.success} />
                 <Text style={[styles.chipLabel, { color: palette.success }]}>Play offline</Text>
               </Pressable>
@@ -128,7 +122,7 @@ export function DownloadsScreen() {
                 <Text style={styles.chipLabel}>{job.state === "paused" ? "Resume" : "Retry"}</Text>
               </Pressable>
             ) : null}
-            <Pressable style={styles.chipAction} onPress={confirmDelete.bind(null, job)}>
+            <Pressable style={styles.chipAction} onPress={() => confirmDelete(job)}>
               <Trash2 size={13} color={palette.danger} />
               <Text style={[styles.chipLabel, { color: palette.danger }]}>Delete</Text>
             </Pressable>
@@ -143,14 +137,12 @@ export function DownloadsScreen() {
     <View style={[styles.root, { paddingTop: insets.top + spacing.md }]}>
       <Text style={styles.title}>Downloads</Text>
       <Text style={styles.subtitle}>
-        {user
-          ? "Files live in this app's private storage and play without a network."
-          : "Sign in to keep stories on this device."}
+        Files live in this app's private storage on this device and play without a network.
       </Text>
       {jobs.length === 0 ? (
         <EmptyState
           title="No downloads yet"
-          message={user ? "Open any title and tap the download icon to save it for offline viewing." : "Sign in first — then downloads live here."}
+          message="Open any title and tap the download icon to save it for offline viewing."
         />
       ) : (
         <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxxl }}>

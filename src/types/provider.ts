@@ -1,7 +1,6 @@
 /**
- * Verified provider contract (verified live 2026-11-03 — see
- * docs/provider-integration/zarhosting-moviebox.md). Runtime validation is
- * mandatory: provider JSON is never trusted because of TypeScript types.
+ * Zarhosting public API contract. Runtime validation is mandatory: provider
+ * JSON is never trusted because of TypeScript types.
  */
 
 export interface CatalogueItem {
@@ -90,35 +89,27 @@ export class ProviderError extends Error {
   }
 }
 
-/** Safe catalog item shape returned by /home and /search. */
-export interface RawItem {
-  name?: unknown;
-  poster_url?: unknown;
-  slug?: unknown;
-  subject_id?: unknown;
-  badge?: unknown;
-  rating?: unknown;
-  year?: unknown;
-  genre?: unknown;
-  type?: unknown;
-}
-
 export function parseCatalogueItem(raw: unknown): CatalogueItem | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as RawItem;
-  if (typeof r.name !== "string" || typeof r.slug !== "string" || typeof r.subject_id !== "string") {
-    return null;
-  }
-  const mediaType = r.type === "series" || r.type === "tv" ? "series" : "movie";
+  const r = raw as Record<string, unknown>;
+  const name = isNonEmptyString(r.name) ? r.name : isNonEmptyString(r.title) ? r.title : null;
+  const slug = isNonEmptyString(r.slug) ? r.slug : isNonEmptyString(r.detail_path) ? r.detail_path : isNonEmptyString(r.detailPath) ? r.detailPath : null;
+  const subjectId = isNonEmptyString(r.subject_id) ? r.subject_id : isNonEmptyString(r.subjectId) ? r.subjectId : null;
+  if (!name || !slug || !subjectId) return null;
+  const cover = typeof r.cover === "object" && r.cover !== null ? (r.cover as Record<string, unknown>) : null;
+  const posterUrl = isNonEmptyString(r.poster_url) ? r.poster_url : isNonEmptyString(r.posterUrl) ? r.posterUrl : isNonEmptyString(cover?.url) ? cover!.url : null;
+  const type = r.type ?? r.subjectType;
+  const mediaType = type === "series" || type === "tv" || type === 2 ? "series" : "movie";
+  const year = r.year ?? (isNonEmptyString(r.releaseDate) ? r.releaseDate.slice(0, 4) : null);
   return {
-    name: r.name,
-    posterUrl: typeof r.poster_url === "string" ? r.poster_url : null,
-    slug: r.slug,
-    subjectId: r.subject_id,
-    badge: typeof r.badge === "string" && r.badge ? r.badge : null,
-    rating: typeof r.rating === "string" && r.rating ? r.rating : null,
-    year: typeof r.year === "string" ? r.year : typeof r.year === "number" ? String(r.year) : null,
-    genre: typeof r.genre === "string" ? r.genre : null,
+    name,
+    posterUrl,
+    slug,
+    subjectId,
+    badge: isNonEmptyString(r.badge) ? r.badge : null,
+    rating: isNonEmptyString(r.rating) ? r.rating : isNonEmptyString(r.imdbRatingValue) ? r.imdbRatingValue : null,
+    year: typeof year === "string" ? year : typeof year === "number" ? String(year) : null,
+    genre: isNonEmptyString(r.genre) ? r.genre : null,
     mediaType,
   };
 }

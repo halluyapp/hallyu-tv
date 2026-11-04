@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { absolutePath, jobPaths, sanitizeFilename } from "../src/services/downloads/paths";
+import { absolutePath, jobPaths, localFileUri, sanitizeFilename } from "../src/services/downloads/paths";
 
 const BASE = "file:///data/user/0/app.hallyutv.dev/files/downloads/";
 
@@ -11,13 +11,21 @@ describe("absolutePath", () => {
   test("leaves already-absolute inputs untouched", () => {
     expect(absolutePath(BASE, "other.bin")).toBe(`${BASE}other.bin`);
   });
+
+  test("only strips the downloads prefix at the start", () => {
+    expect(absolutePath(BASE, "downloads/a_downloads_b.mp4")).toBe(`${BASE}a_downloads_b.mp4`);
+  });
 });
 
 describe("jobPaths", () => {
-  test("produces matching .part and .mp4 siblings", () => {
-    const { partPath, finalPath } = jobPaths("Dead-End Job", 1, 3);
-    expect(partPath).toBe("downloads/Dead-End_Job_1_3.part");
-    expect(finalPath).toBe("downloads/Dead-End_Job_1_3.mp4");
+  test("produces matching .part and .mp4 siblings keyed by subject id", () => {
+    const { partPath, finalPath } = jobPaths("478", "Dead-End Job", 1, 3);
+    expect(partPath).toBe("downloads/478_Dead-End_Job_1_3.part");
+    expect(finalPath).toBe("downloads/478_Dead-End_Job_1_3.mp4");
+  });
+
+  test("same display name with different subject ids cannot collide", () => {
+    expect(jobPaths("1", "Same Title", 0, 0).finalPath).not.toBe(jobPaths("2", "Same Title", 0, 0).finalPath);
   });
 });
 
@@ -33,5 +41,16 @@ describe("sanitizeFilename", () => {
 
   test("falls back to a safe name for fully-unsafe input", () => {
     expect(sanitizeFilename("???")).toBe("title");
+  });
+});
+
+describe("localFileUri", () => {
+  test("adds file:// to bare native paths", () => {
+    expect(localFileUri("/storage/emulated/0/Android/data/app/files/x.mp4")).toBe("file:///storage/emulated/0/Android/data/app/files/x.mp4");
+  });
+
+  test("preserves existing schemes", () => {
+    expect(localFileUri("file:///data/x.mp4")).toBe("file:///data/x.mp4");
+    expect(localFileUri("content://media/x")).toBe("content://media/x");
   });
 });

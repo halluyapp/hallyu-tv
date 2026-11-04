@@ -1,14 +1,11 @@
-import { useGate } from "@/components/auth/GateProvider";
-import { Button } from "@/components/ui/Button";
-import { EmptyState } from "@/components/ui/States";
+
 import { LibraryTitle } from "@/state/LibraryContext";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
-import { useAuth } from "@/hooks/useAuth";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { useLibrary } from "@/state/LibraryContext";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
-import { LogOut, MonitorSmartphone, ShieldCheck } from "lucide-react-native";
+import { MonitorSmartphone, ShieldCheck } from "lucide-react-native";
 import React from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,8 +13,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function MySpaceScreen() {
-  const { user, signOut } = useAuth();
-  const { showGate } = useGate();
   const { watchlist, progress } = useLibrary();
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
@@ -31,46 +26,19 @@ export function MySpaceScreen() {
     >
       <Text style={styles.title}>My Space</Text>
 
-      {user ? (
-        <View style={styles.profileCard}>
-          {user.picture ? (
-            <Image source={{ uri: user.picture }} style={styles.avatar} />
-          ) : (
-            <View style={[styles.avatar, styles.avatarPlaceholder]}>
-              <Text style={styles.avatarInitial}>{(user.name ?? user.email ?? "?").charAt(0).toUpperCase()}</Text>
-            </View>
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.profileName} numberOfLines={1}>{user.name ?? "Viewer"}</Text>
-            <Text style={styles.profileEmail} numberOfLines={1}>{user.email}</Text>
-            <View style={styles.badgeRow}>
-              <ShieldCheck size={12} color={palette.success} />
-              <Text style={styles.badgeText}>Sessions stay on this device</Text>
-            </View>
+      <View style={styles.profileCard}>
+        <View style={[styles.avatar, styles.avatarPlaceholder]}>
+          <ShieldCheck size={24} color={palette.accentBright} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.profileName}>Your device, your library</Text>
+          <Text style={styles.profileEmail}>No account required</Text>
+          <View style={styles.badgeRow}>
+            <ShieldCheck size={12} color={palette.success} />
+            <Text style={styles.badgeText}>Watchlist and progress stay on this device</Text>
           </View>
-          <Pressable onPress={() => void signOut()} style={styles.signOut}>
-            <LogOut size={16} color={palette.danger} />
-          </Pressable>
         </View>
-      ) : (
-        <View style={styles.guestCard}>
-          <Text style={styles.guestTitle}>You're watching as a guest</Text>
-          <Text style={styles.guestBody}>
-            Sign in with Google to keep your watchlist and resume points across this device and your TV. Playback
-            never auto-starts — you're always in control of the tap.
-          </Text>
-          <Button
-            label="Sign in with Google"
-            onPress={() =>
-              showGate({
-                title: "One tap to sign in",
-                message: "Google sign-in takes seconds. Your library syncs privately to your account.",
-              })
-            }
-            variant="primary"
-          />
-        </View>
-      )}
+      </View>
 
       <SectionHeading label="Continue watching" count={resumeList.length} />
       {resumeList.length === 0 ? (
@@ -80,12 +48,7 @@ export function MySpaceScreen() {
           {resumeList.map((p) => (
             <Pressable
               key={`${p.subject_id}_${p.season_number ?? 0}_${p.episode_number ?? 0}`}
-              onPress={() => {
-                void (async () => {
-                  // Re-enter through Details so Play is always an explicit user action.
-                  navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id });
-                })();
-              }}
+              onPress={() => navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id })}
               style={styles.resumeCard}
             >
               {p.poster_url ? <Image source={{ uri: p.poster_url }} style={styles.resumePoster} /> : <View style={[styles.resumePoster, { backgroundColor: palette.surfaceRaised }]} />}
@@ -114,15 +77,14 @@ export function MySpaceScreen() {
         </View>
       )}
 
-      <SectionHeading label="Devices" />
-      <Pressable style={styles.deviceRow} onPress={() => navigation.navigate("Devices")}>
+      <SectionHeading label="Independent devices" />
+      <View style={styles.deviceRow}>
         <MonitorSmartphone size={20} color={palette.accentBright} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.deviceTitle}>TVs & linked devices</Text>
-          <Text style={styles.deviceMeta}>Pair this account with a TV using a 6-digit code.</Text>
+          <Text style={styles.deviceTitle}>TV and mobile work on their own</Text>
+          <Text style={styles.deviceMeta}>Each device keeps its own library and downloads. No pairing or sign-in is needed.</Text>
         </View>
-        <Text style={styles.chev}>›</Text>
-      </Pressable>
+      </View>
     </ScrollView>
   );
 }
@@ -174,23 +136,10 @@ const styles = StyleSheet.create({
   },
   avatar: { width: 56, height: 56, borderRadius: 28 },
   avatarPlaceholder: { backgroundColor: palette.accentSoft, alignItems: "center", justifyContent: "center" },
-  avatarInitial: { color: palette.accentBright, fontSize: 22, fontWeight: "800" },
   profileName: { ...typeScale.headline, color: palette.textPrimary },
   profileEmail: { color: palette.textMuted, fontSize: 12 },
   badgeRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 },
   badgeText: { color: palette.success, fontSize: 11 },
-  signOut: { padding: spacing.sm },
-  guestCard: {
-    marginHorizontal: spacing.xl,
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.card,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  guestTitle: { ...typeScale.headline, color: palette.textPrimary },
-  guestBody: { color: palette.textSecondary, lineHeight: 20 },
   sectionHeading: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.xl, marginTop: spacing.xxl, marginBottom: spacing.md },
   sectionLabel: { ...typeScale.micro, color: palette.textSecondary },
   sectionCount: { ...typeScale.micro, color: palette.accent },
@@ -213,6 +162,5 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   deviceTitle: { ...typeScale.headline, color: palette.textPrimary },
-  deviceMeta: { color: palette.textMuted, fontSize: 12 },
-  chev: { color: palette.textMuted, fontSize: 22 },
+  deviceMeta: { color: palette.textMuted, fontSize: 12, lineHeight: 17 },
 });

@@ -15,6 +15,7 @@ interface HallyuDownloaderNativeModule {
     total: number;
     reason: number;
     localPath?: string;
+    fileSize?: number;
   }>;
   remove(key: string): Promise<void>;
 }
@@ -43,6 +44,7 @@ export const nativeDownloader = {
     total: number;
     reason: number;
     localPath?: string;
+    fileSize?: number;
   } | null> {
     if (!native) return Promise.resolve(null);
     return native.query(key);

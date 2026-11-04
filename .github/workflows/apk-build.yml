@@ -26,17 +26,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Restore public env config
-        run: cp .env.example .env
-
-      - name: Unit tests (normalization, selection, subtitles)
+      - name: Unit tests
         run: bun test
 
       - name: Typecheck
-        run: bunx tsc --noEmit
-
-      - name: Generate placeholder brand assets (if missing)
-        run: '[ -f assets/images/icon.png ] || node scripts/gen-placeholder-icons.mjs'
+        run: bun run typecheck
 
       - name: Expo prebuild (android)
         run: bunx expo prebuild -p android --no-install

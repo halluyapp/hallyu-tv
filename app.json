@@ -5,7 +5,7 @@
     "version": "0.1.0",
     "orientation": "default",
     "userInterfaceStyle": "dark",
-    "scheme": "rork-tmm1xojnlt3p8gfm6c1xf",
+    "scheme": "hallyu-tv",
     "backgroundColor": "#080A0D",
     "splash": {
       "backgroundColor": "#080A0D",
@@ -22,30 +22,17 @@
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
-        "android.permission.CAMERA",
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "androidStatusBar": {
       "translucent": true,
-      "backgroundColor": "#080A0D00"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
-      }
+      "backgroundColor": "#080A0D"
     },
     "plugins": [
       "expo-video",
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Hallyu TV uses the camera only to scan TV pairing QR codes."
-        }
-      ],
-      "./plugins/withHallyuDownloader"
+      "./plugins/withHallyuDownloader",
+      "./plugins/withAndroidTvSupport"
     ]
   }
 }

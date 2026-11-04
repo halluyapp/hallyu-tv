@@ -7,7 +7,6 @@ export type DownloadState =
   | "downloading"
   | "paused"
   | "waiting_for_network"
-  | "retrying"
   | "verifying"
   | "completed"
   | "failed"
@@ -37,12 +36,8 @@ export interface DownloadJob extends DownloadRequest {
   partPath: string;
   finalPath: string;
   failureReason: string | null;
-  /** Which engine owns the bytes. Persisted so restarts reconcile correctly. */
   engine: DownloadEngine;
-  /** Native engine only: absolute file path reported by the system on success. */
   nativeKey?: string;
-  /** Fresh-source retries already attempted (persisted so the proxy fallback survives restarts). */
+  /** Fresh-source retries already attempted. */
   freshRetries?: number;
-  /** True when the current source URL points at the media proxy instead of the CDN. */
-  viaProxy?: boolean;
 }

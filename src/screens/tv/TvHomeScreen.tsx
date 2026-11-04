@@ -2,43 +2,26 @@ import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { APP_NAME } from "@/config/branding";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchHome } from "@/services/provider/adapter";
-import { ProviderError } from "@/types/provider";
-import { tvSync } from "@/services/pairing";
-import { CatalogueItem, HomeSection } from "@/types/provider";
-import * as SecureStore from "expo-secure-store";
+import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
+import { useLibrary, type LibraryTitle, type ProgressRow } from "@/state/LibraryContext";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
-import { Search, RefreshCw } from "lucide-react-native";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Search, RefreshCw, Download } from "lucide-react-native";
+import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-interface TvLibraryItem {
-  subject_id: string;
-  detail_path: string | null;
-  media_type: "movie" | "series";
-  title: string;
-  poster_url: string | null;
-  position_seconds?: number | null;
-  duration_seconds?: number | null;
-  season_number?: number | null;
-  episode_number?: number | null;
-  completed?: boolean;
-}
-
 /**
- * 10-foot TV home — a full browsing experience in its own right, expanded for
- * the big screen. Content comes straight from the provider; pairing is only
- * the sign-in that unlocks the account (synced Continue Watching / Watchlist
- * rows appear as a bonus on top of the catalogue, never instead of it).
+ * Independent 10-foot TV home. Catalogue comes straight from Zarhosting;
+ * Continue Watching / Watchlist are this TV's own local library. No phone,
+ * pairing, account, or sync service is involved.
  */
 export function TvHomeScreen() {
   const navigation = useNavigation<Nav>();
+  const { progress, watchlist } = useLibrary();
   const [sections, setSections] = useState<HomeSection[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [synced, setSynced] = useState<{ resume: TvLibraryItem[]; watchlist: TvLibraryItem[] }>({ resume: [], watchlist: [] });
-  const firstFocusDone = useRef(false);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -49,30 +32,17 @@ export function TvHomeScreen() {
     }
   }, []);
 
-  const loadSynced = useCallback(async () => {
-    try {
-      const deviceId = await SecureStore.getItemAsync("tv_device_id");
-      const secret = await SecureStore.getItemAsync("tv_session_secret");
-      if (!deviceId || !secret) return;
-      const res = await tvSync<{ watchlist: TvLibraryItem[]; resume: TvLibraryItem[] }>(deviceId, secret, "get_state");
-      setSynced({ resume: res.resume ?? [], watchlist: res.watchlist ?? [] });
-    } catch {
-      // Sync is a bonus row; the catalogue works without it.
-    }
-  }, []);
-
   useEffect(() => {
     void load();
-    void loadSynced();
-  }, [load, loadSynced]);
+  }, [load]);
 
   const open = (detailPath: string, subjectId: string) => {
-    // Details always requires an explicit focus + select: nothing auto-plays.
     navigation.navigate("Details", { detailPath, subjectId });
   };
 
   const hero = sections?.find((s) => s.section === "Banner")?.items[0] ?? sections?.[0]?.items[0] ?? null;
-  const rails = (sections ?? []).filter((s) => s.items.length > 0 && s.items[0]);
+  const rails = (sections ?? []).filter((s) => s.items.length > 0 && s.section !== "Banner");
+  const resume = progress.filter((p) => !p.completed && p.position_seconds > 5).slice(0, 20);
 
   return (
     <View style={styles.root}>
@@ -81,28 +51,29 @@ export function TvHomeScreen() {
           <Text style={styles.brand}>{APP_NAME.toUpperCase()}</Text>
           <Text style={styles.tagline}>The big screen, on its own terms</Text>
         </View>
-        <Pressable
-          onPress={() => navigation.navigate("TvSearch")}
-          onHoverIn={() => {}}
-          style={styles.searchBtn}
-          hasTVPreferredFocus
-        >
-          <Search size={16} color={palette.textPrimary} />
-          <Text style={styles.searchText}>Search</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable onPress={() => navigation.navigate("TvDownloads")} style={styles.searchBtn}>
+            <Download size={16} color={palette.textPrimary} />
+            <Text style={styles.searchText}>Downloads</Text>
+          </Pressable>
+          <Pressable onPress={() => navigation.navigate("TvSearch")} style={styles.searchBtn} hasTVPreferredFocus>
+            <Search size={16} color={palette.textPrimary} />
+            <Text style={styles.searchText}>Search</Text>
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xxl }}>
         {hero ? (
-          <Pressable onPress={() => open(hero.slug, hero.subjectId)} style={styles.hero} hasTVPreferredFocus={!firstFocusDone.current}>
+          <Pressable onPress={() => open(hero.slug, hero.subjectId)} style={styles.hero}>
             {hero.posterUrl ? <Image source={{ uri: hero.posterUrl }} style={styles.heroImage} resizeMode="cover" /> : null}
             <View style={styles.heroScrim} />
             <View style={styles.heroContent}>
               <Text style={styles.heroBadge}>Featured</Text>
               <Text numberOfLines={2} style={styles.heroTitle}>{hero.name}</Text>
-              {[hero.year, hero.genre, hero.rating && `★ ${hero.rating}`].filter(Boolean).map((meta, i) => (
-                <Text key={i} style={styles.heroMeta}>{meta}</Text>
-              ))}
+              <Text style={styles.heroMeta}>
+                {[hero.year, hero.genre, hero.rating && `★ ${hero.rating}`].filter(Boolean).join(" · ")}
+              </Text>
               <View style={styles.heroPlay}>
                 <Text style={styles.heroPlayText}>Open</Text>
               </View>
@@ -110,33 +81,22 @@ export function TvHomeScreen() {
           </Pressable>
         ) : null}
 
-        {synced.resume.length > 0 ? (
-          <LibraryRow
-            label="Continue watching"
-            items={synced.resume}
-            onOpen={(item) => item.detail_path && open(item.detail_path, item.subject_id)}
-          />
+        {resume.length > 0 ? (
+          <ProgressRowView label="Continue watching" items={resume} onOpen={(item) => item.detail_path && open(item.detail_path, item.subject_id)} />
         ) : null}
 
         {rails.map((s) => (
           <Rail key={s.section} label={sectionLabel(s.section)} items={s.items} onOpen={(item) => open(item.slug, item.subjectId)} />
         ))}
 
-        {synced.watchlist.length > 0 ? (
-          <LibraryRow
-            label="Watchlist"
-            items={synced.watchlist}
-            onOpen={(item) => item.detail_path && open(item.detail_path, item.subject_id)}
-          />
+        {watchlist.length > 0 ? (
+          <LibraryRow label="Watchlist" items={watchlist} onOpen={(item) => item.detail_path && open(item.detail_path, item.subject_id)} />
         ) : null}
 
         {loadError ? (
           <View style={styles.errorBox}>
             <Text style={styles.errorTitle}>{loadError}</Text>
-            <Pressable
-              onPress={() => void load()}
-              style={[styles.searchBtn, { marginTop: spacing.md }]}
-            >
+            <Pressable onPress={() => void load()} style={[styles.searchBtn, { marginTop: spacing.md }]}>
               <RefreshCw size={15} color={palette.textPrimary} />
               <Text style={styles.searchText}>Retry</Text>
             </Pressable>
@@ -156,16 +116,7 @@ function sectionLabel(raw: string): string {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-/** Catalogue rail — landscape cards with d-pad focus scale. */
-function Rail({
-  label,
-  items,
-  onOpen,
-}: {
-  label: string;
-  items: CatalogueItem[];
-  onOpen: (item: CatalogueItem) => void;
-}) {
+function Rail({ label, items, onOpen }: { label: string; items: CatalogueItem[]; onOpen: (item: CatalogueItem) => void }) {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
   return (
     <View style={{ marginBottom: spacing.xl }}>
@@ -195,29 +146,17 @@ function Rail({
   );
 }
 
-/** Synced library row — same card style, from the paired account. */
-function LibraryRow({
-  label,
-  items,
-  onOpen,
-}: {
-  label: string;
-  items: TvLibraryItem[];
-  onOpen: (item: TvLibraryItem) => void;
-}) {
+function ProgressRowView({ label, items, onOpen }: { label: string; items: ProgressRow[]; onOpen: (item: ProgressRow) => void }) {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
   return (
     <View style={{ marginBottom: spacing.xl }}>
       <Text style={styles.rowLabel}>{label}</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
         {items.map((item, idx) => {
-          const pct =
-            item.duration_seconds && item.duration_seconds > 0
-              ? Math.round(((item.position_seconds ?? 0) / item.duration_seconds) * 100)
-              : null;
+          const pct = item.duration_seconds > 0 ? Math.round((item.position_seconds / item.duration_seconds) * 100) : null;
           return (
             <Pressable
-              key={`${item.subject_id}_${idx}`}
+              key={`${item.subject_id}_${item.season_number ?? 0}_${item.episode_number ?? 0}`}
               onPress={() => onOpen(item)}
               onFocus={() => setFocusedIdx(idx)}
               onBlur={() => setFocusedIdx(null)}
@@ -228,7 +167,7 @@ function LibraryRow({
               ) : (
                 <View style={[styles.tilePoster, { backgroundColor: palette.surfaceRaised }]} />
               )}
-              {pct !== null && pct > 0 && !item.completed ? <View style={[styles.tileBar, { width: `${Math.min(100, pct)}%` }]} /> : null}
+              {pct !== null && pct > 0 ? <View style={[styles.tileBar, { width: `${Math.min(100, pct)}%` }]} /> : null}
               <Text style={styles.tileTitle} numberOfLines={1}>{item.title}</Text>
               <Text style={styles.tileMeta}>
                 {item.media_type === "series" ? `S${item.season_number ?? 1} E${item.episode_number ?? 1}` : "Movie"}
@@ -236,6 +175,34 @@ function LibraryRow({
             </Pressable>
           );
         })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function LibraryRow({ label, items, onOpen }: { label: string; items: LibraryTitle[]; onOpen: (item: LibraryTitle) => void }) {
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+  return (
+    <View style={{ marginBottom: spacing.xl }}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+        {items.map((item, idx) => (
+          <Pressable
+            key={item.subject_id}
+            onPress={() => onOpen(item)}
+            onFocus={() => setFocusedIdx(idx)}
+            onBlur={() => setFocusedIdx(null)}
+            style={[styles.tile, focusedIdx === idx && styles.tileFocused]}
+          >
+            {item.poster_url ? (
+              <Image source={{ uri: item.poster_url }} style={styles.tilePoster} resizeMode="cover" />
+            ) : (
+              <View style={[styles.tilePoster, { backgroundColor: palette.surfaceRaised }]} />
+            )}
+            <Text style={styles.tileTitle} numberOfLines={1}>{item.title}</Text>
+            <Text style={styles.tileMeta}>{item.media_type === "series" ? "Series" : "Movie"}</Text>
+          </Pressable>
+        ))}
       </ScrollView>
     </View>
   );
@@ -251,6 +218,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerActions: { flexDirection: "row", gap: spacing.md },
   brand: { ...typeScale.display, color: palette.accent, letterSpacing: 4 },
   tagline: { ...typeScale.caption, color: palette.textMuted, marginTop: 2 },
   searchBtn: {

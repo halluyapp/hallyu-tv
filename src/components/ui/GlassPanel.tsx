@@ -1,4 +1,3 @@
-import { motion } from "@/design-system/motionConfig";
 import { palette, radius } from "@/design-system/tokens";
 import React, { useCallback, useRef } from "react";
 import { Animated, Pressable, PressableProps, StyleProp, StyleSheet, View, ViewStyle } from "react-native";

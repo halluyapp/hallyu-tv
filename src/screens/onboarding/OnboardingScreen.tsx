@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/Button";
 import { palette, spacing, typeScale } from "@/design-system/tokens";
 import React, { useRef, useState } from "react";
-import { Animated, Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Compass, Download, Play } from "lucide-react-native";
 import { APP_NAME } from "@/config/branding";
@@ -16,7 +16,7 @@ const STEPS = [
   {
     icon: Play,
     title: "Watch in cinematic quality",
-    body: "Pick your quality, choose your subtitles, and pick up exactly where you left off on any device.",
+    body: "Pick your quality, choose your subtitles, and pick up where you left off on this device.",
     accent: palette.textPrimary,
   },
   {

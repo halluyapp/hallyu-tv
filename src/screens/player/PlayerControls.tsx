@@ -1,5 +1,5 @@
 import { palette, radius, spacing } from "@/design-system/tokens";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
 import {
   ChevronLeft,
@@ -52,7 +52,6 @@ export function PlayerControls(props: PlayerControlsProps) {
   const [trackWidth, setTrackWidth] = useState(1);
   const [focused, setFocused] = useState<string | null>(null);
   const scrubRef = useRef({ value: 0 });
-  const pendingSeek = useRef<number | null>(null);
 
   // While scrubbing, ignore incoming position updates and seek once, on release.
   const shown = scrub ?? Math.min(position, duration || position);
@@ -60,40 +59,46 @@ export function PlayerControls(props: PlayerControlsProps) {
   const pct = total > 0 ? Math.min(1, shown / total) : 0;
   const bufferedPct = total > 0 ? Math.min(1, Math.max(buffered, shown) / total) : 0;
 
+  const scrubbingRef = useRef(false);
+  const totalRef = useRef(total);
+  totalRef.current = total;
+  const widthRef = useRef(trackWidth);
+  widthRef.current = trackWidth;
+  const onSeekRef = useRef(props.onSeek);
+  onSeekRef.current = props.onSeek;
+
   const pan = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponder: () => totalRef.current > 0,
+        onMoveShouldSetPanResponder: () => totalRef.current > 0,
         onPanResponderGrant: (e) => {
-          if (total <= 0) return;
-          scrubRef.current = { value: Math.min(total, Math.max(0, (e.nativeEvent.locationX / Math.max(trackWidth, 1)) * total)) };
-          setScrub(scrubRef.current.value);
+          if (totalRef.current <= 0) return;
+          scrubbingRef.current = true;
+          const value = Math.min(totalRef.current, Math.max(0, (e.nativeEvent.locationX / Math.max(widthRef.current, 1)) * totalRef.current));
+          scrubRef.current = { value };
+          setScrub(value);
         },
         onPanResponderMove: (e) => {
-          if (total <= 0 || scrub === null) return;
-          scrubRef.current = { value: Math.min(total, Math.max(0, (e.nativeEvent.locationX / Math.max(trackWidth, 1)) * total)) };
-          setScrub(scrubRef.current.value);
+          if (totalRef.current <= 0 || !scrubbingRef.current) return;
+          const value = Math.min(totalRef.current, Math.max(0, (e.nativeEvent.locationX / Math.max(widthRef.current, 1)) * totalRef.current));
+          scrubRef.current = { value };
+          setScrub(value);
         },
         onPanResponderRelease: () => {
-          if (total > 0 && scrub !== null) {
-            pendingSeek.current = scrubRef.current.value;
+          if (scrubbingRef.current) {
+            scrubbingRef.current = false;
+            onSeekRef.current(scrubRef.current.value);
             setScrub(null);
           }
         },
-        onPanResponderTerminate: () => setScrub(null),
+        onPanResponderTerminate: () => {
+          scrubbingRef.current = false;
+          setScrub(null);
+        },
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [total, trackWidth, scrub !== null],
+    [],
   );
-
-  useEffect(() => {
-    if (pendingSeek.current !== null) {
-      const t = pendingSeek.current;
-      pendingSeek.current = null;
-      props.onSeek(t);
-    }
-  }, [scrub]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const focusStyle = (id: string) => (isTV && focused === id ? styles.focused : null);
 
