@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/Button";
-import { palette, spacing, typeScale } from "@/design-system/tokens";
+import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { useSound } from "@/services/sound/SoundContext";
 import React, { useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
@@ -12,13 +12,13 @@ const STEPS = [
     icon: Compass,
     title: "Discover stories worth your evening",
     body: `A curated world of films and series — browse everything ${APP_NAME} has on offer, freely.`,
-    accent: palette.accent,
+    accent: palette.accentBright,
   },
   {
     icon: Play,
     title: "Watch in cinematic quality",
     body: "Pick your quality, choose your subtitles, and pick up where you left off on this device.",
-    accent: palette.textPrimary,
+    accent: palette.cyan,
   },
   {
     icon: Download,
@@ -89,16 +89,16 @@ const styles = StyleSheet.create({
     width: 380,
     height: 380,
     borderRadius: 190,
-    backgroundColor: palette.emberGlow,
+    backgroundColor: palette.glow,
     opacity: 0.35,
   },
   content: { alignItems: "center", paddingHorizontal: spacing.xxl, gap: spacing.xl },
   iconWrap: {
     width: 76,
     height: 76,
-    borderRadius: 38,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    backgroundColor: palette.glassFill,
+    backgroundColor: palette.glassFillStrong,
     alignItems: "center",
     justifyContent: "center",
   },

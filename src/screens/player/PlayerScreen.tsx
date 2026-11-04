@@ -1,3 +1,5 @@
+import { chrome } from "@/design-system/gradients";
+import { materials } from "@/design-system/materials";
 import { palette, spacing } from "@/design-system/tokens";
 import { Platform } from "react-native";
 import { RootStackParamList } from "@/navigation/RootNavigator";
@@ -5,6 +7,9 @@ import { fetchCaptions, fetchCaptionText, resolveStreams } from "@/services/prov
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
 import { classifyPlayerError, playerErrorMessage, PlayerErrorKind } from "@/services/player/classify";
 import { PlayerControls } from "./PlayerControls";
+import { PlayerBoundary } from "@/components/ui/PlayerBoundary";
+import { PlayerGuard, episodeKeyOf } from "@/services/player/lifecycle";
+import { CONTROLS_IDLE_MS } from "@/design-system/motion";
 import { NativeTracksOptions, PickerSheet, QualityOptions, SpeedOptions, SubtitleOptions } from "./PickerSheets";
 import { pickRecoverySource, qualityOptions, selectableSources, selectSource } from "@/services/provider/streams";
 import { cueAt, parseSubtitles, Cue } from "@/services/subtitles/srt";
@@ -24,6 +29,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const MAX_RECOVERY_ATTEMPTS = 4;
+/**
+ * A real, tiny, always-available local URI used only to construct the player.
+ * The first real source replaces it immediately. Using a local asset avoids a
+ * native player created around a null/undefined source.
+ */
+const OFFLINE_PLACEHOLDER_URI = "file:///android_asset/placeholder.mp4";
 const BUFFER_STALL_TIMEOUT_MS = 30_000;
 
 function isOfflineUri(uri: string): boolean {
@@ -34,7 +45,7 @@ function videoSourceFor(source: StreamSource): VideoSource {
   return isOfflineUri(source.url) ? { uri: source.url } : { uri: source.url, headers: { ...PROVIDER_MEDIA_HEADERS } };
 }
 
-export function PlayerScreen() {
+function PlayerScreenInner() {
   const route = useRoute<RouteProp<RootStackParamList, "Player">>();
   const navigation = useNavigation<Nav>();
   const { subjectId, detailPath, title, mediaType, season, episode, sources, resumeAt, nextEpisode } = route.params;
@@ -75,6 +86,8 @@ export function PlayerScreen() {
 
   const controlsOpacity = useRef(new Animated.Value(1)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while a control inside the chrome has focus (TV keeps it visible). */
+  const focusHeldRef = useRef(false);
   const rateRef = useRef(rate);
   rateRef.current = rate;
   const requestSeqRef = useRef(0);
@@ -84,36 +97,10 @@ export function PlayerScreen() {
   const lastSavedRef = useRef(0);
   const captionAbortRef = useRef<AbortController | null>(null);
   const captionSeqRef = useRef(0);
-  const episodeKey = `${subjectId}|${detailPath}|${season}|${episode}`;
+  const episodeKey = episodeKeyOf({ subjectId, detailPath, season, episode });
   const lastEpisodeKeyRef = useRef(episodeKey);
 
   const startAt = Math.max(0, resumeAt);
-  const initialSource = useMemo(() => (source ? videoSourceFor(source) : null), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const player = useVideoPlayer(initialSource, (p) => {
-    p.timeUpdateEventInterval = 0.5;
-    p.currentTime = startAt;
-    if (initialSource) {
-      p.playbackRate = 1;
-      p.play();
-    }
-  });
-
-  const playing = useEvent(player, "playingChange", { isPlaying: false });
-  const statusChange = useEvent(player, "statusChange", { status: "loading" as const, error: undefined });
-  const timeUpdate = useEvent(player, "timeUpdate", {
-    currentTime: startAt,
-    currentLiveTimestamp: null,
-    currentOffsetFromLive: 0,
-    bufferedPosition: 0,
-  });
-
-  const offline = source ? isOfflineUri(source.url) : false;
-  const qualityList = useMemo(() => qualityOptions(availableSources), [availableSources]);
-
-  useEffect(() => {
-    setIsPlaying(playing.isPlaying);
-    if (playing.isPlaying) setBuffering(false);
-  }, [playing]);
 
   const showError = useCallback(
     (kind: PlayerErrorKind, detail?: string | null) => {
@@ -125,28 +112,121 @@ export function PlayerScreen() {
     [play],
   );
 
+  /**
+   * ONE player for the whole screen lifetime.
+   *
+   * `useVideoPlayer` keys its shared object on the source it was created with.
+   * Passing a source that changes (which the previous implementation did through
+   * a mount-time memo plus late-arriving route params) makes expo-video release
+   * the old player and build a new one, detaching every event subscription the
+   * screen already registered — the root of the released-object crash.
+   *
+   * The player is created with a placeholder and the first real source is
+   * applied through `replaceAsync`, so the object identity never changes and no
+   * subscription can be left pointing at a freed handle.
+   */
+  const initialUri = useMemo(() => (source ? source.url : OFFLINE_PLACEHOLDER_URI), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const initialHeaders = useMemo(() => (source && !isOfflineUri(source.url) ? { ...PROVIDER_MEDIA_HEADERS } : undefined), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const player = useVideoPlayer({ uri: initialUri, headers: initialHeaders }, (p) => {
+    p.timeUpdateEventInterval = 0.5;
+    p.muted = true;
+  });
+
+  /**
+   * Every native touch goes through the guard. Anything that was awaiting when
+   * the screen unmounted (recovery, retry, quality switch, next episode, the
+   * buffering watchdog, caption loading) is dropped instead of touching a
+   * released player.
+   */
+  const guardRef = useRef(new PlayerGuard());
+  const guard = guardRef.current;
+  const mountedRef = useRef(true);
+
+  const alive = useCallback(() => guard.isReleased === false && mountedRef.current, [guard]);
+
+  const playing = useEvent(player, "playingChange", { isPlaying: false });
+  const statusChange = useEvent(player, "statusChange", { status: "loading" as const, error: undefined });
+  const timeUpdate = useEvent(player, "timeUpdate", {
+    currentTime: startAt,
+    currentLiveTimestamp: null,
+    currentOffsetFromLive: 0,
+    bufferedPosition: 0,
+  });
+
+  const offline = source ? isOfflineUri(source.url) : false;
+
+  // Apply the real source once the screen has mounted. Replacing (never
+  // recreating) keeps the player object and its listeners stable.
+  const initialAppliedRef = useRef(false);
+  /** One recovery cycle per underlying error; reset when a source is applied. */
+  const errorHandledRef = useRef(false);
+  useEffect(() => {
+    if (initialAppliedRef.current || !source) return;
+    initialAppliedRef.current = true;
+    const at = Math.max(0, resumeAt);
+    void (async () => {
+      const token = guard.token();
+      try {
+        // If the player was constructed with this exact URL there is nothing to
+        // replace — just start it. Re-replacing the same source would trigger a
+        // redundant network load and a visible re-buffer at launch.
+        if (source.url === initialUri) {
+          if (!guard.isCurrent(token)) return;
+          player.muted = false;
+          player.currentTime = at;
+          player.playbackRate = 1;
+          player.play();
+          return;
+        }
+        await player.replaceAsync(videoSourceFor(source));
+        if (!guard.isCurrent(token)) return;
+        player.muted = false;
+        player.currentTime = at;
+        player.playbackRate = 1;
+        player.play();
+      } catch {
+        if (!guard.isCurrent(token)) return;
+        showError("format", null);
+      }
+    })();
+  }, [source, resumeAt, player, guard, showError]);
+  const qualityList = useMemo(() => qualityOptions(availableSources), [availableSources]);
+
+  useEffect(() => {
+    setIsPlaying(playing.isPlaying);
+    if (playing.isPlaying) setBuffering(false);
+  }, [playing]);
+
   /** Replace the native player's source while preserving playback position. */
   const applySource = useCallback(
     async (next: StreamSource, at: number) => {
+      if (!alive()) return;
       const seq = ++requestSeqRef.current;
+      const token = guard.token();
       setSource(next);
       sourceRef.current = next;
       recoveryRef.current.triedUrls.add(next.url);
       setStatus("loading");
       setBuffering(true);
       setFailMessage(null);
+      errorHandledRef.current = false;
       try {
         await player.replaceAsync(videoSourceFor(next));
-        if (seq !== requestSeqRef.current) return;
+        // The screen may have unmounted (or the source been superseded) while
+        // the native replace was in flight — touching the player now is exactly
+        // what produced the "already released" crash.
+        if (seq !== requestSeqRef.current || !guard.isCurrent(token) || !alive()) return;
+        initialAppliedRef.current = true;
+        player.muted = false;
         player.currentTime = Math.max(0, at);
         player.playbackRate = rateRef.current;
         player.play();
       } catch (err) {
-        if (seq !== requestSeqRef.current) return;
+        if (seq !== requestSeqRef.current || !guard.isCurrent(token) || !alive()) return;
         showError(classifyPlayerError(err instanceof Error ? err.message : ""), null);
       }
     },
-    [player, showError],
+    [player, showError, guard, alive],
   );
 
   /** Bounded direct-CDN recovery: fresh resolve, same quality first, then fallback. */
@@ -165,10 +245,11 @@ export function PlayerScreen() {
       }
       state.running = true;
       state.attempts += 1;
-      const at = player.currentTime;
+      const at = guard.use((p) => p.currentTime, player) ?? 0;
       state.triedUrls.add(current.url);
       try {
         const res = await resolveStreams(subjectId, detailPath, season, episode);
+        if (!alive()) return;
         setAvailableSources(res.sources);
         const picked = pickRecoverySource(res.sources, state.triedUrls, current.resolution);
         if (!picked) {
@@ -177,13 +258,14 @@ export function PlayerScreen() {
         }
         await applySource(picked, at);
       } catch (err) {
+        if (!alive()) return;
         const nested = classifyPlayerError(err instanceof Error ? err.message : "");
         showError(kind, playerErrorMessage(nested === "unknown" ? kind : nested));
       } finally {
         state.running = false;
       }
     },
-    [player, subjectId, detailPath, season, episode, applySource, showError],
+    [player, subjectId, detailPath, season, episode, applySource, showError, guard, alive],
   );
 
   // If the screen is reused for a different episode, reset everything and load
@@ -203,42 +285,46 @@ export function PlayerScreen() {
     setTracksError(null);
     setPosition(resumeAt);
     const next = selectSource(sources, null);
+    // With no sources on the route, the resolve effect below fetches them.
+    // Showing "no source" here would flash an error before that request returns.
     if (next) void applySource(next, resumeAt);
-    else showError("format", "No playable source was returned for this episode.");
-  }, [episodeKey, sources, resumeAt, applySource, showError]);
+  }, [episodeKey, sources, resumeAt, applySource, guard, alive]);
 
   // Route params may arrive with no sources ("Next episode" handoff): resolve
   // them here through the standard Zarhosting endpoint, same as Details does.
   useEffect(() => {
     if (sources.length > 0 || !detailPath) return;
     setStatus("loading");
+    const token = guard.token();
     void (async () => {
       try {
         const res = await resolveStreams(subjectId, detailPath, season, episode);
+        if (!alive() || !guard.isCurrent(token)) return;
         setAvailableSources(res.sources);
         const picked = selectSource(res.sources, null);
         if (!picked) throw new Error("empty");
         recoveryRef.current = { attempts: 0, triedUrls: new Set(), running: false };
-        await applySource(picked, 0);
+        await applySource(picked, Math.max(0, resumeAt));
       } catch {
-        showError("empty_response", "The next episode could not be opened. Try again from its details page.");
+        if (!alive() || !guard.isCurrent(token)) return;
+        showError("empty_response", "This episode could not be opened. Try again from the details page.");
       }
     })();
-  }, [sources, subjectId, detailPath, season, episode, applySource, showError]);
+  }, [sources, subjectId, detailPath, season, episode, applySource, showError, resumeAt, guard, alive]);
 
   /** Snapshot the stream's own audio/subtitle tracks from expo-video. */
   const refreshNativeTracks = useCallback(() => {
-    try {
-      setNativeAudioTracks([...player.availableAudioTracks]);
-      setNativeSubtitleTracks([...player.availableSubtitleTracks]);
-      setNativeAudioId(player.audioTrack?.id ?? null);
-      setNativeSubtitleId(player.subtitleTrack?.id ?? null);
-    } catch {
-      // Track selection is a bonus; never break playback over it.
-    }
-  }, [player]);
+    // Track selection is a bonus; never break playback over it.
+    guard.use((p) => {
+      setNativeAudioTracks([...p.availableAudioTracks]);
+      setNativeSubtitleTracks([...p.availableSubtitleTracks]);
+      setNativeAudioId(p.audioTrack?.id ?? null);
+      setNativeSubtitleId(p.subtitleTrack?.id ?? null);
+    }, player);
+  }, [player, guard]);
 
   useEffect(() => {
+    if (!alive()) return;
     setBuffering(statusChange.status === "loading");
     if (statusChange.status === "readyToPlay") {
       setStatus("ready");
@@ -247,10 +333,18 @@ export function PlayerScreen() {
       return;
     }
     if (statusChange.status === "error") {
+      // Before the real source is applied the player is sitting on the local
+      // placeholder. Its failure (if any) must never be reported as a stream
+      // error — that would show "Playback problem" before we even started.
+      // Once a real source is live, the same flag guards against duplicate
+      // reports: recovery may legitimately fail, and it must not be retried
+      // repeatedly for one underlying error.
+      if (!initialAppliedRef.current || errorHandledRef.current) return;
+      errorHandledRef.current = true;
       const kind = classifyPlayerError(statusChange.error?.message ?? "");
       void recover(kind, null);
     }
-  }, [statusChange, recover, refreshNativeTracks]);
+  }, [statusChange, recover, refreshNativeTracks, alive]);
 
   // Live countdown while buffering, so a stall is visible instead of silent.
   useEffect(() => {
@@ -273,8 +367,9 @@ export function PlayerScreen() {
 
   // Progress + subtitle clock. Persist locally every 10s of playback.
   useEffect(() => {
+    if (!alive()) return;
     const t = timeUpdate?.currentTime ?? position;
-    const d = player.duration;
+    const d = guard.use((p) => p.duration, player) ?? 0;
     setPosition(t);
     setBufferedPosition(Math.max(0, timeUpdate?.bufferedPosition ?? 0));
     if (d > 0) setDuration(d);
@@ -295,17 +390,20 @@ export function PlayerScreen() {
         completed: d > 0 && t / d >= COMPLETION_THRESHOLD,
       });
     }
-  }, [timeUpdate, player, activeTrack, cues, subtitleOffset, subjectId, detailPath, mediaType, title, season, episode, saveProgress, route.params.posterUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [timeUpdate, player, activeTrack, cues, subtitleOffset, subjectId, detailPath, mediaType, title, season, episode, saveProgress, route.params.posterUrl, guard, alive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (activeTrack) setCurrentCue(cueAt(cues, player.currentTime * 1000, subtitleOffset * 1000));
-  }, [cues, subtitleOffset, activeTrack, player]);
+    if (!activeTrack || !alive()) return;
+    const now = guard.use((p) => p.currentTime, player);
+    if (now == null) return;
+    setCurrentCue(cueAt(cues, now * 1000, subtitleOffset * 1000));
+  }, [cues, subtitleOffset, activeTrack, player, guard, alive]);
 
   // Save on unmount.
   const saveOnExitRef = useRef<() => void>(() => {});
   saveOnExitRef.current = () => {
-    const t = player.currentTime;
-    const d = player.duration;
+    const t = guard.use((p) => p.currentTime, player) ?? 0;
+    const d = guard.use((p) => p.duration, player) ?? 0;
     if (t > 3) {
       void saveProgress({
         subject_id: subjectId,
@@ -321,8 +419,24 @@ export function PlayerScreen() {
       });
     }
   };
-  useEffect(() => () => saveOnExitRef.current(), []);
-  useEffect(() => () => captionAbortRef.current?.abort(), []);
+  /**
+   * Unmount sequence matters. Order:
+   *  1. persist where we stopped (player still alive),
+   *  2. stop all our timers,
+   *  3. abort in-flight caption work,
+   *  4. mark the guard released LAST so anything that was already awaiting a
+   *     native call bails out instead of touching a released object.
+   */
+  useEffect(
+    () => () => {
+      saveOnExitRef.current();
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      captionAbortRef.current?.abort();
+      mountedRef.current = false;
+      guardRef.current.release();
+    },
+    [],
+  );
 
   const loadCaptions = useCallback(async () => {
     if (tracks !== null || tracksLoading) return;
@@ -368,15 +482,22 @@ export function PlayerScreen() {
   );
 
   const showControls = useCallback(() => {
+    if (!alive()) return;
     setControlsVisible(true);
     Animated.timing(controlsOpacity, { toValue: 1, duration: 150, useNativeDriver: true }).start();
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
-      if (player.playing) {
-        Animated.timing(controlsOpacity, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => setControlsVisible(false));
+      // On TV the controls only hide while the video is actually playing AND
+      // nothing inside the chrome holds focus. Hiding them under a focused
+      // button would strand the remote with no visible target.
+      const playing = guard.use((p) => p.playing, player) ?? false;
+      if (playing && !focusHeldRef.current) {
+        Animated.timing(controlsOpacity, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => {
+          if (alive()) setControlsVisible(false);
+        });
       }
-    }, 3200);
-  }, [player, controlsOpacity]);
+    }, CONTROLS_IDLE_MS);
+  }, [player, controlsOpacity, guard, alive]);
 
   useEffect(() => {
     showControls();
@@ -387,49 +508,57 @@ export function PlayerScreen() {
 
   const skip = useCallback(
     (seconds: number) => {
-      const max = player.duration > 0 ? player.duration : player.currentTime + seconds;
-      player.currentTime = Math.max(0, Math.min(max, player.currentTime + seconds));
+      guard.use((p) => {
+        const duration = p.duration;
+        const now = p.currentTime;
+        const max = duration > 0 ? duration : now + seconds;
+        p.currentTime = Math.max(0, Math.min(max, now + seconds));
+      }, player);
       showControls();
     },
-    [player, showControls],
+    [player, showControls, guard],
   );
 
   const togglePlay = useCallback(() => {
-    if (player.playing) player.pause();
-    else player.play();
+    guard.use((p) => {
+      if (p.playing) p.pause();
+      else p.play();
+    }, player);
     showControls();
-  }, [player, showControls]);
+  }, [player, showControls, guard]);
 
   const setPlaybackRate = useCallback(
     (next: number) => {
-      player.playbackRate = next;
+      guard.use((p) => {
+        p.playbackRate = next;
+      }, player);
       setRate(next);
       setSpeedPickerOpen(false);
       showControls();
     },
-    [player, showControls],
+    [player, showControls, guard],
   );
 
   const pickNativeAudio = useCallback(
     (t: AudioTrack | null) => {
-      try {
-        player.audioTrack = t;
-        setNativeAudioId(t?.id ?? null);
-      } catch {}
+      guard.use((p) => {
+        p.audioTrack = t;
+      }, player);
+      setNativeAudioId(t?.id ?? null);
       setSubtitlePickerOpen(false);
     },
-    [player],
+    [player, guard],
   );
 
   const pickNativeSubtitle = useCallback(
     (t: SubtitleTrack | null) => {
-      try {
-        player.subtitleTrack = t;
-        setNativeSubtitleId(t?.id ?? null);
-      } catch {}
+      guard.use((p) => {
+        p.subtitleTrack = t;
+      }, player);
+      setNativeSubtitleId(t?.id ?? null);
       setSubtitlePickerOpen(false);
     },
-    [player],
+    [player, guard],
   );
 
   const goNextEpisode = useCallback(() => {
@@ -452,17 +581,18 @@ export function PlayerScreen() {
     (next: StreamSource) => {
       setQualityPickerOpen(false);
       recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
-      void applySource(next, player.currentTime);
+      void applySource(next, guard.use((p) => p.currentTime, player) ?? 0);
     },
-    [applySource, player],
+    [applySource, player, guard],
   );
 
   /** Manual retry always resolves a fresh direct URL (offline files are reused). */
   const retry = useCallback(() => {
     setFailMessage(null);
+    errorHandledRef.current = false;
     recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
     const current = sourceRef.current;
-    const at = player.currentTime;
+    const at = guard.use((p) => p.currentTime, player) ?? 0;
     if (!current) {
       showError("format", "No playable source is available.");
       return;
@@ -475,28 +605,36 @@ export function PlayerScreen() {
     void (async () => {
       try {
         const res = await resolveStreams(subjectId, detailPath, season, episode);
+        if (!alive()) return;
         setAvailableSources(res.sources);
         const picked = selectSource(res.sources, current.resolution) ?? selectSource(res.sources, null);
         if (!picked) throw new Error("No playable source was returned.");
         await applySource(picked, at);
       } catch (err) {
+        if (!alive()) return;
         showError(classifyPlayerError(err instanceof Error ? err.message : ""), null);
       }
     })();
-  }, [player, subjectId, detailPath, season, episode, applySource, showError]);
+  }, [player, subjectId, detailPath, season, episode, applySource, showError, guard, alive]);
 
   const episodeLabel = mediaType === "series" ? `Season ${season} · Episode ${episode}` : null;
 
+  /**
+   * No source yet. This is a normal, transient state for the "next episode"
+   * handoff (route params arrive with an empty source list while the resolver
+   * works), so it renders the same preparing overlay the player uses instead of
+   * flashing a hard error before the request has even returned.
+   */
   if (!source) {
     return (
       <View style={styles.root}>
-        <View style={styles.errorOverlay}>
-          <Text style={styles.errorTitle}>Nothing to play</Text>
-          <Text style={styles.errorMessage}>No full-length playable source was returned for this title.</Text>
-          <Pressable style={styles.errorBtn} onPress={() => navigation.goBack()}>
-            <Text style={styles.errorBtnText}>Back</Text>
-          </Pressable>
+        <View style={styles.centerOverlay}>
+          <ActivityIndicator size="large" color={palette.accent} />
+          <Text style={styles.bufferLabel}>Finding a playable source…</Text>
         </View>
+        <Pressable style={[styles.errorBtn, styles.abortBtn]} onPress={() => navigation.goBack()} accessibilityRole="button">
+          <Text style={styles.errorBtnText}>Cancel</Text>
+        </Pressable>
       </View>
     );
   }
@@ -540,7 +678,7 @@ export function PlayerScreen() {
           <Text style={styles.errorTitle}>Playback problem</Text>
           <Text style={styles.errorMessage}>{failMessage ?? "Something interrupted this stream."}</Text>
           <Pressable style={[styles.errorBtn, { backgroundColor: palette.accent }]} onPress={retry}>
-            <Text style={[styles.errorBtnText, { color: "#160B08" }]}>Retry</Text>
+            <Text style={[styles.errorBtnText, { color: palette.textOnAccent }]}>Retry</Text>
           </Pressable>
           <Pressable style={styles.errorBtn} onPress={() => navigation.goBack()}>
             <Text style={styles.errorBtnText}>Back</Text>
@@ -578,6 +716,11 @@ export function PlayerScreen() {
             }}
             onSpeed={() => setSpeedPickerOpen(true)}
             onNextEpisode={goNextEpisode}
+            onFocusHold={(held) => {
+              focusHeldRef.current = held;
+              // Keep the chrome alive while the remote is inside it.
+              if (held) showControls();
+            }}
           />
         </Animated.View>
       ) : null}
@@ -633,6 +776,18 @@ export function PlayerScreen() {
   );
 }
 
+/**
+ * The exported screen wraps the player in a local boundary. A fault in the video
+ * engine now shows an in-context retry instead of destroying the whole app.
+ */
+export function PlayerScreen() {
+  return (
+    <PlayerBoundary>
+      <PlayerScreenInner />
+    </PlayerBoundary>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
   chromeWrap: { ...StyleSheet.absoluteFillObject },
@@ -655,7 +810,7 @@ const styles = StyleSheet.create({
   },
   errorOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(8,10,13,0.94)",
+    backgroundColor: chrome.scrimStrong,
     alignItems: "center",
     justifyContent: "center",
     padding: spacing.xxl,
@@ -664,8 +819,8 @@ const styles = StyleSheet.create({
   errorTitle: { fontSize: 20, fontWeight: "800", color: palette.textPrimary },
   errorMessage: { color: palette.textSecondary, textAlign: "center", marginBottom: spacing.sm, lineHeight: 21 },
   errorBtn: {
-    backgroundColor: "rgba(244,242,237,0.10)",
-    borderColor: palette.glassStroke,
+    backgroundColor: materials.secondary.fill,
+    borderColor: materials.secondary.border,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
     paddingVertical: 12,
@@ -673,4 +828,5 @@ const styles = StyleSheet.create({
   },
   errorBtnText: { color: palette.textPrimary, fontWeight: "800", fontSize: 14 },
   pickerNote: { color: palette.textMuted, fontSize: 12, textAlign: "center", marginTop: spacing.xs },
+  abortBtn: { position: "absolute", bottom: 64, alignSelf: "center" },
 });

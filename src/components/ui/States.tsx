@@ -31,7 +31,7 @@ export function Skeleton({ width, height, style }: { width: number | `${number}%
           style={[
             StyleSheet.absoluteFill,
             {
-              backgroundColor: "rgba(225,235,245,0.06)",
+              backgroundColor: palette.glassFill,
               transform: [{ translateX: Animated.multiply(translateX, width === "100%" ? 300 : (typeof width === "number" ? width : 300)) }],
             },
           ]}

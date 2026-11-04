@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const { patchManifest } = require("../plugins/withAndroidTvSupport.js") as {
-  patchManifest: (manifest: any) => any;
+  patchManifest: (manifest: any, options?: { banner?: string }) => any;
 };
 
 function baseManifest() {
@@ -62,5 +62,41 @@ describe("Android TV manifest support", () => {
     const videoEntry = appJson.expo.plugins.find((p: unknown) => Array.isArray(p));
     expect(videoEntry?.[1]?.supportsPictureInPicture).toBe(true);
     expect(appJson.expo.android.permissions).not.toContain("android.permission.CAMERA");
+  });
+});
+
+describe("Android TV banner", () => {
+  test("adds the leanback banner attribute when a banner is configured", () => {
+    const patched = patchManifest(baseManifest(), { banner: "@drawable/tv_banner" });
+    expect(patched.manifest.application[0].$["android:banner"]).toBe("@drawable/tv_banner");
+  });
+
+  test("leaves the manifest untouched when no banner is configured", () => {
+    const patched = patchManifest(baseManifest(), {});
+    expect(patched.manifest.application[0].$?.["android:banner"]).toBeUndefined();
+  });
+
+  test("the app config declares a TV banner asset that exists", () => {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "app.json"), "utf8"));
+    const banner = pkg.expo.android.tvBanner;
+    expect(typeof banner).toBe("string");
+    // Must be a real file — a broken path silently ships a generic icon.
+    const stat = require("node:fs").statSync(join(import.meta.dir, "..", banner.replace("./", "")));
+    expect(stat.size).toBeGreaterThan(1000);
+  });
+});
+
+describe("Android TV banner drawable", () => {
+  test("the plugin exports the drawable name it references", () => {
+    const mod = require("../plugins/withAndroidTvSupport.js") as { BANNER_DRAWABLE: string };
+    expect(mod.BANNER_DRAWABLE).toBe("tv_banner");
+  });
+
+  test("the banner asset is a real 320x180 PNG (leanback requirement)", () => {
+    const buffer = readFileSync(join(import.meta.dir, "..", "assets", "tv-banner.png"));
+    // PNG signature + IHDR dimensions.
+    expect(buffer.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(buffer.readUInt32BE(16)).toBe(320);
+    expect(buffer.readUInt32BE(20)).toBe(180);
   });
 });

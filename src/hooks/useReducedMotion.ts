@@ -2,24 +2,31 @@ import { useEffect, useState } from "react";
 import { AccessibilityInfo } from "react-native";
 
 /**
- * True when the OS "reduce motion" accessibility setting is on. Motion-driven
- * components must degrade to opacity/none when this is true — movement is
- * enhancement, never a requirement.
+ * True when the OS "reduce motion" accessibility setting is on.
+ *
+ * Subscribes to live changes (RN 0.81 exposes `reduceMotionChanged`), so a user
+ * who flips the setting while the app is open is respected immediately instead
+ * of after a remount. Motion-driven components degrade to opacity/none.
  */
 export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-    // Queried on mount; RN does not expose a cross-platform change event for
-    // this setting, so a remount (e.g. re-entering a screen) refreshes it.
+
     AccessibilityInfo.isReduceMotionEnabled?.()
       .then((v) => {
         if (mounted) setReduced(Boolean(v));
       })
       .catch(() => {});
+
+    const sub = AccessibilityInfo.addEventListener?.("reduceMotionChanged", (v: boolean) => {
+      if (mounted) setReduced(Boolean(v));
+    });
+
     return () => {
       mounted = false;
+      sub?.remove?.();
     };
   }, []);
 

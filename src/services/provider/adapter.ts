@@ -1,5 +1,6 @@
-import { providerFetch, PROVIDER_MEDIA_HEADERS } from "./client";
+import { providerFetch, PROVIDER_MEDIA_HEADERS, TIMEOUTS, SEARCH_RETRIES } from "./client";
 import { normalizeStreamResponse, selectableSources, streamEndpoint } from "./streams";
+import { cached } from "./cache";
 import {
   CaptionTrack,
   CatalogueItem,
@@ -22,8 +23,21 @@ function unwrap(raw: unknown): Record<string, unknown> {
   return r;
 }
 
-export async function fetchHome(signal?: AbortSignal): Promise<HomeSection[]> {
-  const raw = await providerFetch("/home", { signal });
+/**
+ * Catalogue rails. Cached with stale-while-revalidate and de-duplicated, so
+ * Home, Explore and TV Home share one request instead of three.
+ */
+export async function fetchHome(opts: { signal?: AbortSignal; force?: boolean; onBackground?: (s: HomeSection[]) => void } = {}): Promise<HomeSection[]> {
+  return cached(
+    "home",
+    "all",
+    () => fetchHomeUncached(opts.signal),
+    { force: opts.force, onBackground: opts.onBackground },
+  );
+}
+
+async function fetchHomeUncached(signal?: AbortSignal): Promise<HomeSection[]> {
+  const raw = await providerFetch("/home", { signal, timeoutMs: TIMEOUTS.home });
   const data = unwrap(raw);
   const rawSections = Array.isArray(data.sections) ? data.sections : Array.isArray((raw as Record<string, unknown>)?.sections) ? (raw as { sections: unknown[] }).sections : [];
   const sections: HomeSection[] = [];
@@ -50,7 +64,11 @@ export interface SearchPage {
 }
 
 export async function searchCatalogue(query: string, page = 1, signal?: AbortSignal): Promise<SearchPage> {
-  const raw = await providerFetch(`/search?q=${encodeURIComponent(query)}&page=${page}`, { signal });
+  const raw = await providerFetch(`/search?q=${encodeURIComponent(query)}&page=${page}`, {
+    signal,
+    timeoutMs: TIMEOUTS.search,
+    retries: SEARCH_RETRIES,
+  });
   const data = unwrap(raw);
   const rawItems = Array.isArray(data.items) ? data.items : Array.isArray(data.results) ? data.results : [];
   const items = rawItems.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
@@ -60,8 +78,22 @@ export async function searchCatalogue(query: string, page = 1, signal?: AbortSig
   return { items: unique, page, totalPages };
 }
 
-export async function fetchDetail(detailPath: string, signal?: AbortSignal): Promise<TitleDetail> {
-  const raw = await providerFetch(`/detail/${encodeURIComponent(detailPath)}`, { signal });
+/**
+ * Title detail. Cached per detail path: re-opening a title you just looked at is
+ * instant, and metadata is stable for far longer than a stream URL.
+ */
+export async function fetchDetail(
+  detailPath: string,
+  opts: { signal?: AbortSignal; force?: boolean; onBackground?: (d: TitleDetail) => void } = {},
+): Promise<TitleDetail> {
+  return cached("detail", detailPath, () => fetchDetailUncached(detailPath, opts.signal), {
+    force: opts.force,
+    onBackground: opts.onBackground,
+  });
+}
+
+async function fetchDetailUncached(detailPath: string, signal?: AbortSignal): Promise<TitleDetail> {
+  const raw = await providerFetch(`/detail/${encodeURIComponent(detailPath)}`, { signal, timeoutMs: TIMEOUTS.detail });
   const data = unwrap(raw);
   const subject = (typeof data.subject === "object" && data.subject !== null ? data.subject : data) as Record<string, any>;
   if (!isNonEmptyString(subject.subjectId) || !isNonEmptyString(subject.title)) {
@@ -131,7 +163,7 @@ export async function resolveStreams(
     throw new ProviderError("invalid_response", "Season and episode must be non-negative integers.");
   }
   const raw = await providerFetch(streamEndpoint(subjectId, detailPath, se, ep), {
-    timeoutMs: 20_000,
+    timeoutMs: TIMEOUTS.stream,
     signal,
   });
   const n = normalizeStreamResponse(raw);
@@ -159,7 +191,10 @@ export async function fetchCaptions(
   signal?: AbortSignal,
 ): Promise<CaptionTrack[]> {
   const qs = `detail_path=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
-  const raw = await providerFetch(`/stream/${encodeURIComponent(subjectId)}/captions?${qs}`, { signal });
+  const raw = await providerFetch(`/stream/${encodeURIComponent(subjectId)}/captions?${qs}`, {
+    signal,
+    timeoutMs: TIMEOUTS.captions,
+  });
   const data = unwrap(raw);
   const list = Array.isArray(data.captions) ? data.captions : Array.isArray(data.subtitles) ? data.subtitles : [];
   const tracks: CaptionTrack[] = [];
@@ -186,7 +221,7 @@ export async function fetchCaptions(
 export async function fetchCaptionText(url: string, signal?: AbortSignal): Promise<string> {
   if (!/^https:\/\//i.test(url)) throw new ProviderError("invalid_response", "Invalid caption URL.");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const timeout = setTimeout(() => controller.abort(), TIMEOUTS.captions);
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort);
   try {

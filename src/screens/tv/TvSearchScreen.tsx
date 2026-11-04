@@ -1,143 +1,209 @@
-import { palette, radius, spacing } from "@/design-system/tokens";
+import { TvTile } from "@/components/tv/TvTile";
+import { TvFocusable } from "@/components/tv/TvFocusable";
+import { palette, radius, spacing, tvSafeArea, tvTypeScale } from "@/design-system/tokens";
+import { effects } from "@/hooks/useDeviceTier";
 import { RootStackParamList } from "@/navigation/RootNavigator";
-import { searchCatalogue } from "@/services/provider/adapter";
-import { CatalogueItem } from "@/types/provider";
-import { Poster, initialsFor } from "@/components/ui/Poster";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { searchCatalogue, type SearchPage } from "@/services/provider/adapter";
+import { ProviderError } from "@/types/provider";
 import { useNavigation } from "@react-navigation/native";
-import { ChevronLeft, Search } from "lucide-react-native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { ChevronLeft, Search as SearchIcon } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from "react-native";
+import { initialsFor } from "@/components/ui/Poster";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/** TV search — type with the remote (IME) or an attached keyboard; d-pad to browse results. */
+const DEBOUNCE_MS = 450;
+const COLUMNS = 4;
+
+/**
+ * TV search.
+ *
+ * A television has no touch keyboard, so the input is large, opens focused, and
+ * the remote/IME does the typing. Results are a 4-column grid with large tiles.
+ * Same request discipline as mobile: debounce, monotonic sequence guard, and an
+ * explicit error state instead of pretending a network failure was "no results".
+ */
 export function TvSearchScreen() {
   const navigation = useNavigation<Nav>();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<CatalogueItem[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
-  const inputRef = useRef<TextInput>(null);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fx = effects();
 
-  const run = useCallback(async (q: string) => {
-    if (q.trim().length < 2) {
-      setResults(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState<SearchPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const seqRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const run = useCallback(async (raw: string) => {
+    const q = raw.trim();
+    if (q.length < 2) {
+      abortRef.current?.abort();
+      seqRef.current += 1;
+      setPage(null);
+      setLoading(false);
+      setError(null);
       return;
     }
+    const seq = ++seqRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
+    setError(null);
     try {
-      const page = await searchCatalogue(q.trim(), 1);
-      setResults(page.items);
-    } catch {
-      setResults([]);
+      const result = await searchCatalogue(q, 1, controller.signal);
+      if (seq !== seqRef.current) return;
+      setPage(result);
+    } catch (err) {
+      if (seq !== seqRef.current || controller.signal.aborted) return;
+      setError(err instanceof ProviderError ? err.message : "Search could not be completed.");
+      setPage(null);
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => void run(query), 450);
-    return () => {
-      if (debounce.current) clearTimeout(debounce.current);
-    };
+    const t = setTimeout(() => void run(query), DEBOUNCE_MS);
+    return () => clearTimeout(t);
   }, [query, run]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn} hasTVPreferredFocus={results === null}>
-          <ChevronLeft size={22} color={palette.textPrimary} />
-        </Pressable>
+        <TvFocusable
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          style={styles.backBtn}
+        >
+          <ChevronLeft size={26} color={palette.textPrimary} />
+        </TvFocusable>
         <View style={styles.inputWrap}>
-          <Search size={16} color={palette.textMuted} />
+          <SearchIcon size={22} color={palette.textMuted} />
           <TextInput
-            ref={inputRef}
             value={query}
             onChangeText={setQuery}
-            placeholder="Search titles…"
+            placeholder="Search titles"
             placeholderTextColor={palette.textMuted}
             style={styles.input}
+            autoFocus
             returnKeyType="search"
             onSubmitEditing={() => void run(query)}
-            autoFocus
+            accessibilityLabel="Search field"
           />
         </View>
       </View>
 
       {loading ? <ActivityIndicator style={{ marginTop: spacing.xxl }} size="large" color={palette.accent} /> : null}
 
-      {results !== null && !loading ? (
-        results.length === 0 ? (
-          <Text style={styles.empty}>Nothing matched “{query}”.</Text>
-        ) : (
-          <FlatList
-            data={results}
-            numColumns={4}
-            keyExtractor={(item) => `${item.subjectId}_${item.slug}`}
-            contentContainerStyle={styles.grid}
-            showsVerticalScrollIndicator={false}
-            windowSize={5}
-            initialNumToRender={12}
-            maxToRenderPerBatch={12}
-            removeClippedSubviews
-            renderItem={({ item, index }) => (
-              <Pressable
-                onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
-                onFocus={() => setFocusedIdx(index)}
-                onBlur={() => setFocusedIdx(null)}
-                style={[styles.card, focusedIdx === index && styles.cardFocused]}
-              >
-                <Poster uri={item.posterUrl} style={styles.poster} initials={initialsFor(item.name)} />
-                <Text style={styles.cardTitle} numberOfLines={2}>{item.name}</Text>
-                <Text style={styles.cardMeta}>
-                  {[item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · ")}
-                </Text>
-              </Pressable>
-            )}
-          />
-        )
+      {error && !loading ? (
+        <View style={styles.centered}>
+          <Text style={styles.errorTitle}>Search failed</Text>
+          <Text style={styles.errorBody}>{error}</Text>
+          <TvFocusable onPress={() => void run(query)} hasTVPreferredFocus accessibilityRole="button" style={styles.retryBtn}>
+            <Text style={styles.retryLabel}>Try again</Text>
+          </TvFocusable>
+        </View>
       ) : null}
 
-      {results === null && !loading ? <Text style={styles.hint}>Type at least two characters.</Text> : null}
+      {!loading && !error && page && page.items.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.emptyTitle}>Nothing matched “{query.trim()}”</Text>
+          <Text style={styles.emptyBody}>Try a shorter phrase or a different title.</Text>
+        </View>
+      ) : null}
+
+      {!loading && !error && page && page.items.length > 0 ? (
+        <FlatList
+          data={page.items}
+          key={`grid-${COLUMNS}`}
+          numColumns={COLUMNS}
+          keyExtractor={(item) => `${item.subjectId}_${item.slug}`}
+          contentContainerStyle={styles.grid}
+          columnWrapperStyle={{ gap: spacing.xl }}
+          showsVerticalScrollIndicator={false}
+          windowSize={fx.listWindow}
+          initialNumToRender={12}
+          maxToRenderPerBatch={fx.listBatch}
+          removeClippedSubviews
+          renderItem={({ item, index }) => (
+            <TvTile
+              title={item.name}
+              posterUrl={item.posterUrl}
+              initials={initialsFor(item.name)}
+              meta={[item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · ")}
+              width={240}
+              hasPreferredFocus={index === 0}
+              onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
+            />
+          )}
+        />
+      ) : null}
+
+      {!loading && !error && !page ? (
+        <View style={styles.centered}>
+          <Text style={styles.emptyTitle}>Search the catalogue</Text>
+          <Text style={styles.emptyBody}>Type at least two characters.</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
-  header: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.lg },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.lg,
+    paddingHorizontal: tvSafeArea.horizontal,
+    paddingTop: tvSafeArea.vertical + spacing.lg,
+    paddingBottom: spacing.lg,
+  },
   backBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 3,
+    borderColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
   },
+  backBtnFocused: { borderColor: palette.cyan },
   inputWrap: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    backgroundColor: palette.glassFill,
+    gap: spacing.md,
+    backgroundColor: palette.glassFillStrong,
+    borderWidth: 1,
     borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    height: 48,
+    paddingHorizontal: spacing.xl,
+    height: 64,
   },
-  input: { flex: 1, color: palette.textPrimary, fontSize: 16, paddingVertical: 0 },
-  grid: { gap: spacing.lg, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
-  card: { width: 190, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface },
-  cardFocused: { transform: [{ scale: 1.05 }], borderColor: palette.accent, borderWidth: 2 },
-  poster: { width: 190, height: 107, backgroundColor: palette.surfaceRaised },
-  cardTitle: { color: palette.textPrimary, fontSize: 13, fontWeight: "600", padding: spacing.sm, paddingBottom: 0 },
-  cardMeta: { color: palette.textMuted, fontSize: 10, padding: spacing.sm, paddingTop: 2 },
-  empty: { color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xl },
-  hint: { color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xl },
+  input: { flex: 1, color: palette.textPrimary, fontSize: 22, paddingVertical: 0 },
+  grid: { gap: spacing.xl, paddingHorizontal: tvSafeArea.horizontal, paddingBottom: spacing.huge },
+  centered: { alignItems: "center", justifyContent: "center", paddingVertical: spacing.huge, gap: spacing.md },
+  errorTitle: { ...tvTypeScale.title, color: palette.textPrimary },
+  errorBody: { ...tvTypeScale.body, color: palette.textSecondary, textAlign: "center", maxWidth: 700 },
+  emptyTitle: { ...tvTypeScale.title, color: palette.textPrimary },
+  emptyBody: { ...tvTypeScale.body, color: palette.textSecondary },
+  retryBtn: {
+    marginTop: spacing.md,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: palette.glassStroke,
+    backgroundColor: palette.glassFill,
+    paddingHorizontal: spacing.xxl,
+    paddingVertical: spacing.md,
+  },
+  retryLabel: { ...tvTypeScale.body, color: palette.textPrimary, fontWeight: "700" },
 });
