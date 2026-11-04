@@ -7,6 +7,7 @@ import { MySpaceScreen } from "@/screens/mine/MySpaceScreen";
 import { PlayerScreen } from "@/screens/player/PlayerScreen";
 import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
 import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
+import { TvSettingsScreen } from "@/screens/tv/TvSettingsScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
 import { useSound } from "@/services/sound/SoundContext";
@@ -38,6 +39,7 @@ export type RootStackParamList = {
   TvHome: undefined;
   TvSearch: undefined;
   TvDownloads: undefined;
+  TvSettings: undefined;
 };
 
 export type TabParamList = {
@@ -126,6 +128,7 @@ export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
         <Stack.Screen name="TvHome" component={TvHomeScreen} />
         <Stack.Screen name="TvSearch" component={TvSearchScreen} />
         <Stack.Screen name="TvDownloads" component={DownloadsScreen} />
+        <Stack.Screen name="TvSettings" component={TvSettingsScreen} />
         <Stack.Screen name="Details" component={DetailsScreen} />
         <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "all" }} />
       </Stack.Navigator>

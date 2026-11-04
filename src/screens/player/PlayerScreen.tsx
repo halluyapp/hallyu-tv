@@ -120,6 +120,22 @@ export function PlayerScreen() {
   const lastEpisodeKeyRef = useRef(episodeKey);
 
   const startAt = Math.max(0, resumeAt);
+
+  // `useVideoPlayer` releases the native player as its own unmount cleanup, and
+  // that cleanup runs before the effects declared below it. Anything that runs
+  // on the way out must therefore read these snapshots instead of the player,
+  // otherwise it touches an already-released shared object and crashes.
+  const mountedRef = useRef(true);
+  const positionRef = useRef(startAt);
+  const durationRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const initialSource = useMemo(() => (source ? videoSourceFor(source) : null), []); // eslint-disable-line react-hooks/exhaustive-deps
   const player = useVideoPlayer(initialSource, (p) => {
     p.timeUpdateEventInterval = 0.25;
@@ -162,6 +178,7 @@ export function PlayerScreen() {
   /** Replace the native player's source while preserving playback position. */
   const applySource = useCallback(
     async (next: StreamSource, at: number) => {
+      if (!mountedRef.current) return;
       const seq = ++requestSeqRef.current;
       setSource(next);
       sourceRef.current = next;
@@ -171,7 +188,7 @@ export function PlayerScreen() {
       setFailMessage(null);
       try {
         await player.replaceAsync(videoSourceFor(next));
-        if (seq !== requestSeqRef.current) return;
+        if (seq !== requestSeqRef.current || !mountedRef.current) return;
         player.currentTime = Math.max(0, at);
         player.playbackRate = rateRef.current;
         player.play();
@@ -199,7 +216,7 @@ export function PlayerScreen() {
       }
       state.running = true;
       state.attempts += 1;
-      const at = player.currentTime;
+      const at = positionRef.current;
       state.triedUrls.add(current.url);
       try {
         const res = await resolveStreams(subjectId, detailPath, season, episode);
@@ -321,6 +338,8 @@ export function PlayerScreen() {
   useEffect(() => {
     const t = timeUpdate?.currentTime ?? position;
     const d = player.duration;
+    positionRef.current = t;
+    if (d > 0) durationRef.current = d;
     setPosition(t);
     setBufferedPosition(Math.max(0, timeUpdate?.bufferedPosition ?? 0));
     if (d > 0) setDuration(d);
@@ -357,8 +376,8 @@ export function PlayerScreen() {
   // Save on unmount.
   const saveOnExitRef = useRef<() => void>(() => {});
   saveOnExitRef.current = () => {
-    const t = player.currentTime;
-    const d = player.duration;
+    const t = positionRef.current;
+    const d = durationRef.current;
     if (t > 3) {
       void saveProgress({
         subject_id: subjectId,
@@ -374,7 +393,16 @@ export function PlayerScreen() {
       });
     }
   };
-  useEffect(() => () => saveOnExitRef.current(), []);
+  useEffect(
+    () => () => {
+      try {
+        saveOnExitRef.current();
+      } catch {
+        // Saving progress is best effort; never let it break navigation.
+      }
+    },
+    [],
+  );
   useEffect(() => () => captionAbortRef.current?.abort(), []);
 
   // Leaving the app pauses playback (unless picture-in-picture is active).
@@ -499,6 +527,7 @@ export function PlayerScreen() {
     ]).start();
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
+      if (!mountedRef.current) return;
       // Never vanish while the remote is on the chrome.
       if (player.playing && chromeFocusCount.current === 0) {
         Animated.parallel([
@@ -519,7 +548,10 @@ export function PlayerScreen() {
   const skip = useCallback(
     (seconds: number) => {
       const max = player.duration > 0 ? player.duration : player.currentTime + seconds;
-      player.currentTime = Math.max(0, Math.min(max, player.currentTime + seconds));
+      const next = Math.max(0, Math.min(max, player.currentTime + seconds));
+      player.currentTime = next;
+      positionRef.current = next;
+      setPosition(next);
       showControls();
     },
     [player, showControls],
@@ -546,6 +578,7 @@ export function PlayerScreen() {
           // Hold the right side for a temporary 2×; letting go returns to normal.
           if (pressZoneRef.current === "right" && player.playing) {
             longPressTimerRef.current = setTimeout(() => {
+              if (!mountedRef.current) return;
               longPressActiveRef.current = true;
               player.playbackRate = 2;
               setRate(2);
@@ -680,7 +713,7 @@ export function PlayerScreen() {
     (next: StreamSource) => {
       setQualityPickerOpen(false);
       recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
-      void applySource(next, player.currentTime);
+      void applySource(next, positionRef.current);
     },
     [applySource, player],
   );
@@ -690,7 +723,7 @@ export function PlayerScreen() {
     setFailMessage(null);
     recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
     const current = sourceRef.current;
-    const at = player.currentTime;
+    const at = positionRef.current;
     if (!current) {
       showError("format", "No playable source is available.");
       return;
@@ -863,6 +896,8 @@ export function PlayerScreen() {
             onSkip={skip}
             onSeek={(t) => {
               player.currentTime = t;
+              positionRef.current = t;
+              setPosition(t);
               showControls();
             }}
             onBack={() => navigation.goBack()}
@@ -883,6 +918,7 @@ export function PlayerScreen() {
             onNextEpisode={goNextEpisode}
             onToggleFit={() => setFitMode((mode) => (mode === "contain" ? "cover" : "contain"))}
             onPictureInPicture={() => {
+              if (!mountedRef.current || !videoRef.current) return;
               if (!player.playing) player.play();
               void videoRef.current?.startPictureInPicture().catch(() => {
                 setGestureHint("Picture-in-picture isn't available here");

@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   ArrowDownToLine,
   CheckCircle2,
+  ChevronLeft,
   Circle,
   HardDrive,
   ListChecks,
@@ -417,8 +418,25 @@ export function DownloadsScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top + stage.cardGap }]}>
-      <View style={[styles.titleRow, { paddingHorizontal: stage.gutter }]}>
-        <Text style={[styles.title, { fontSize: stage.titleSize }]}>Downloads</Text>
+      <View style={[styles.titleRow, { paddingHorizontal: stage.gutter, gap: stage.cardGap }]}>
+        {navigation.canGoBack() ? (
+          <Pressable
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            style={{
+              width: stage.controlSize,
+              height: stage.controlSize,
+              borderRadius: stage.controlSize / 2,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "rgba(255,255,255,0.05)",
+            }}
+          >
+            <ChevronLeft size={22} color={palette.textPrimary} />
+          </Pressable>
+        ) : null}
+        <Text style={[styles.title, { fontSize: stage.titleSize, flex: 1 }]}>Downloads</Text>
         {jobs.length > 0 ? (
           <Pressable
             style={styles.selectToggle}

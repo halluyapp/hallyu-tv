@@ -12,7 +12,7 @@ import { useLibrary, type LibraryTitle, type ProgressRow } from "@/state/Library
 import { ProviderError, type HomeSection } from "@/types/provider";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Download, Home as HomeIcon, Search } from "lucide-react-native";
+import { Download, Home as HomeIcon, MonitorSmartphone, Search } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 
@@ -93,6 +93,8 @@ export function TvHomeScreen() {
       { key: "home", label: "Home", icon: HomeIcon, onPress: () => {} },
       { key: "search", label: "Search", icon: Search, onPress: () => navigation.navigate("TvSearch") },
       { key: "downloads", label: "Downloads", icon: Download, onPress: () => navigation.navigate("TvDownloads") },
+      // The TV stack has no profile tab; Display is the way back to phone layout.
+      { key: "display", label: "Display", icon: MonitorSmartphone, onPress: () => navigation.navigate("TvSettings") },
     ],
     [navigation],
   );
