@@ -1,6 +1,7 @@
 import { EmptyState } from "@/components/ui/States";
 import { Poster, initialsFor } from "@/components/ui/Poster";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { useStage } from "@/hooks/useStage";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { downloadManager } from "@/services/downloads/manager";
 import { absolutePathFor, LegacyFileSystem } from "@/services/downloads/fs";
@@ -56,6 +57,7 @@ export function DownloadsScreen() {
   const { resumeFor } = useLibrary();
   const { play } = useSound();
   const insets = useSafeAreaInsets();
+  const stage = useStage();
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
   const [freeBytes, setFreeBytes] = useState<number | null>(null);
   const [selecting, setSelecting] = useState(false);
@@ -188,6 +190,8 @@ export function DownloadsScreen() {
   };
 
   const renderJob = (job: DownloadJob) => {
+    const posterW = Math.round(stage.posterWidth * 0.52);
+    const posterH = Math.round(posterW * 1.5);
     const pct = job.totalBytes && job.totalBytes > 0 ? Math.min(100, (job.receivedBytes / job.totalBytes) * 100) : null;
     const isActive = job.state === "downloading" || job.state === "connecting" || job.state === "queued" || job.state === "verifying" || job.state === "resolving";
     const speed = job.state === "downloading" ? speeds.get(job.id) : undefined;
@@ -198,7 +202,7 @@ export function DownloadsScreen() {
     return (
       <Pressable
         key={job.id}
-        style={styles.job}
+        style={[styles.job, { padding: stage.cardGap, marginHorizontal: stage.gutter }]}
         onPress={() => (selecting ? toggleSelected(job.id) : undefined)}
         accessibilityRole={selecting ? "checkbox" : undefined}
         accessibilityState={selecting ? { checked } : undefined}
@@ -206,10 +210,14 @@ export function DownloadsScreen() {
         {selecting ? (
           checked ? <CheckCircle2 size={20} color={palette.accent} /> : <Circle size={20} color={palette.textMuted} />
         ) : null}
-        <Poster uri={job.posterUrl} style={styles.poster} initials={initialsFor(job.title)} />
+        <Poster
+          uri={job.posterUrl}
+          style={[styles.poster, { width: posterW, height: posterH, borderRadius: stage.focusRing * 3 }]}
+          initials={initialsFor(job.title)}
+        />
         <View style={{ flex: 1, gap: 4 }}>
-          <Text numberOfLines={1} style={styles.jobTitle}>{job.title}</Text>
-          <Text style={styles.jobMeta}>
+          <Text numberOfLines={1} style={[styles.jobTitle, { fontSize: stage.cardTitleSize + 2 }]}>{job.title}</Text>
+          <Text style={[styles.jobMeta, { fontSize: stage.metaSize }]}>
             {[
               STATE_LABEL[job.state] ?? job.state,
               job.mediaType === "series" && job.season ? `S${job.season} E${job.episode}` : "Movie",
@@ -267,9 +275,9 @@ export function DownloadsScreen() {
   };
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top + spacing.md }]}>
-      <View style={styles.titleRow}>
-        <Text style={styles.title}>Downloads</Text>
+    <View style={[styles.root, { paddingTop: insets.top + stage.cardGap }]}>
+      <View style={[styles.titleRow, { paddingHorizontal: stage.gutter }]}>
+        <Text style={[styles.title, { fontSize: stage.titleSize }]}>Downloads</Text>
         {jobs.length > 0 ? (
           <Pressable
             style={styles.selectToggle}
@@ -283,12 +291,12 @@ export function DownloadsScreen() {
           </Pressable>
         ) : null}
       </View>
-      <Text style={styles.subtitle}>
+      <Text style={[styles.subtitle, { paddingHorizontal: stage.gutter, fontSize: Math.max(12, stage.metaSize + 1) }]}>
         Files live in this app's private storage on this device and play without a network.
       </Text>
 
       {selecting ? (
-        <View style={styles.batchBar}>
+        <View style={[styles.batchBar, { marginHorizontal: stage.gutter }]}>
           <Text style={styles.batchCount}>{selected.size} selected</Text>
           <View style={styles.batchActions}>
             {activeSelected.length > 0 ? (
@@ -317,7 +325,7 @@ export function DownloadsScreen() {
       ) : null}
 
       {jobs.length > 0 ? (
-        <View style={styles.meter}>
+        <View style={[styles.meter, { marginHorizontal: stage.gutter }]}>
           <View style={styles.meterHead}>
             <HardDrive size={15} color={palette.accentBright} />
             <Text style={styles.meterTitle}>Offline vault</Text>
@@ -345,7 +353,7 @@ export function DownloadsScreen() {
           message="Open any title and tap the download icon to save it for offline viewing."
         />
       ) : (
-        <ScrollView contentContainerStyle={{ paddingBottom: spacing.xxxl }}>
+        <ScrollView contentContainerStyle={{ paddingBottom: stage.gutter * 2 }}>
           {jobs.map(renderJob)}
           <View style={styles.storageNote}>
             <AlertTriangle size={13} color={palette.textMuted} />

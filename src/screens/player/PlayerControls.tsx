@@ -1,22 +1,16 @@
-import { palette, radius, spacing } from "@/design-system/tokens";
+import type { Stage } from "@/design-system/stage";
+import { palette } from "@/design-system/tokens";
+import { ChevronLeft, Gauge, Pause, Play, RotateCcw, RotateCw, SkipForward, Subtitles, Wifi } from "lucide-react-native";
 import React, { useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
-import {
-  ChevronLeft,
-  Gauge,
-  Pause,
-  Play,
-  RotateCcw,
-  RotateCw,
-  SkipForward,
-  Subtitles,
-  Wifi,
-} from "lucide-react-native";
 
 /**
- * Player chrome: top bar, transport controls, seek bar with a buffered layer,
- * and the quality/subtitle entry points. Hides itself while playing; any tap
- * brings it back. All times are seconds.
+ * Player chrome — a glass slab that rises into the frame.
+ *
+ * Every target is measured from the stage, so a 42dp phone button becomes a
+ * 100px+ remote target on a television. Focus is drawn as an overlay rim
+ * (opacity only) so nothing reflows when the d-pad moves, and the chrome tells
+ * the screen whether anything is focused so it never disappears mid-navigation.
  */
 
 function fmt(t: number): string {
@@ -40,7 +34,8 @@ export interface PlayerControlsProps {
   subtitleLabel: string | null;
   rate: number;
   hasNextEpisode: boolean;
-  isTV: boolean;
+  stage: Stage;
+  onFocusChange?: (focused: boolean) => void;
   onTogglePlay: () => void;
   onSkip: (seconds: number) => void;
   onSeek: (seconds: number) => void;
@@ -52,11 +47,12 @@ export interface PlayerControlsProps {
 }
 
 export function PlayerControls(props: PlayerControlsProps) {
-  const { position, duration, buffered, isPlaying, isTV } = props;
+  const { position, duration, buffered, isPlaying, stage } = props;
   const [scrub, setScrub] = useState<number | null>(null);
   const [trackWidth, setTrackWidth] = useState(1);
   const [focused, setFocused] = useState<string | null>(null);
   const scrubRef = useRef({ value: 0 });
+  const focusCount = useRef(0);
 
   // While scrubbing, ignore incoming position updates and seek once, on release.
   const shown = scrub ?? Math.min(position, duration || position);
@@ -80,13 +76,19 @@ export function PlayerControls(props: PlayerControlsProps) {
         onPanResponderGrant: (e) => {
           if (totalRef.current <= 0) return;
           scrubbingRef.current = true;
-          const value = Math.min(totalRef.current, Math.max(0, (e.nativeEvent.locationX / Math.max(widthRef.current, 1)) * totalRef.current));
+          const value = Math.min(
+            totalRef.current,
+            Math.max(0, (e.nativeEvent.locationX / Math.max(widthRef.current, 1)) * totalRef.current),
+          );
           scrubRef.current = { value };
           setScrub(value);
         },
         onPanResponderMove: (e) => {
           if (totalRef.current <= 0 || !scrubbingRef.current) return;
-          const value = Math.min(totalRef.current, Math.max(0, (e.nativeEvent.locationX / Math.max(widthRef.current, 1)) * totalRef.current));
+          const value = Math.min(
+            totalRef.current,
+            Math.max(0, (e.nativeEvent.locationX / Math.max(widthRef.current, 1)) * totalRef.current),
+          );
           scrubRef.current = { value };
           setScrub(value);
         },
@@ -105,29 +107,68 @@ export function PlayerControls(props: PlayerControlsProps) {
     [],
   );
 
-  const focusStyle = (id: string) => (isTV && focused === id ? styles.focused : null);
+  const handleFocus = (id: string) => {
+    focusCount.current += 1;
+    setFocused(id);
+    props.onFocusChange?.(true);
+  };
+
+  const handleBlur = () => {
+    focusCount.current = Math.max(0, focusCount.current - 1);
+    setFocused(null);
+    props.onFocusChange?.(focusCount.current > 0);
+  };
+
+  /** A focus rim drawn on top of a control: opacity only, no layout movement. */
+  const rim = (id: string) => (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        top: -3,
+        left: -3,
+        right: -3,
+        bottom: -3,
+        borderRadius: 999,
+        borderWidth: stage.focusRing,
+        borderColor: palette.accent,
+        opacity: focused === id ? 1 : 0,
+      }}
+    />
+  );
+
+  const titleSize = Math.round(stage.bodySize + 3);
+  const metaSize = Math.max(11, Math.round(stage.metaSize * 1.1));
+  const pillSize = Math.max(12, Math.round(stage.bodySize * 0.95));
 
   return (
     <View style={styles.chrome} pointerEvents="box-none">
       {/* Top bar */}
-      <View style={styles.topBar}>
+      <View style={[styles.topBar, { paddingHorizontal: stage.gutter, paddingTop: stage.gutter }]}>
         <Pressable
           onPress={props.onBack}
-          onFocus={() => setFocused("back")}
-          onBlur={() => setFocused(null)}
-          hasTVPreferredFocus={isTV}
-          style={[styles.circleBtn, focusStyle("back")]}
-          hitSlop={8}
+          onFocus={() => handleFocus("back")}
+          onBlur={handleBlur}
+          hasTVPreferredFocus={stage.remote}
+          style={[styles.circleBtn, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
         >
-          <ChevronLeft size={22} color={palette.textPrimary} />
+          {rim("back")}
+          <ChevronLeft size={Math.round(stage.u * 3.8)} color={palette.textPrimary} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text numberOfLines={1} style={styles.titleText}>{props.title}</Text>
-          {props.episodeLabel ? <Text style={styles.episodeText}>{props.episodeLabel}</Text> : null}
+          <Text numberOfLines={1} style={[styles.titleText, { fontSize: titleSize }]}>
+            {props.title}
+          </Text>
+          {props.episodeLabel ? (
+            <Text style={[styles.episodeText, { fontSize: metaSize }]}>{props.episodeLabel}</Text>
+          ) : null}
         </View>
         <View style={styles.transportPill}>
           {props.transportLabel === "Offline" ? null : <Wifi size={11} color={palette.textMuted} />}
-          <Text style={styles.transportText}>{props.transportLabel}</Text>
+          <Text style={[styles.transportText, { fontSize: metaSize }]}>{props.transportLabel}</Text>
         </View>
       </View>
 
@@ -135,93 +176,112 @@ export function PlayerControls(props: PlayerControlsProps) {
       <View style={styles.centerRow} pointerEvents="box-none">
         <Pressable
           onPress={() => props.onSkip(-10)}
-          onFocus={() => setFocused("back10")}
-          onBlur={() => setFocused(null)}
-          style={[styles.skipBtn, focusStyle("back10")]}
+          onFocus={() => handleFocus("back10")}
+          onBlur={handleBlur}
+          style={styles.skipBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Back 10 seconds"
         >
-          <RotateCcw size={24} color={palette.textPrimary} />
-          <Text style={styles.skipLabel}>10</Text>
+          {rim("back10")}
+          <RotateCcw size={Math.round(stage.u * 5)} color={palette.textPrimary} />
+          <Text style={[styles.skipLabel, { fontSize: metaSize }]}>10</Text>
         </Pressable>
         <Pressable
           onPress={props.onTogglePlay}
-          onFocus={() => setFocused("play")}
-          onBlur={() => setFocused(null)}
-          style={[styles.playBtn, focusStyle("play")]}
+          onFocus={() => handleFocus("play")}
+          onBlur={handleBlur}
+          style={[styles.playBtn, { width: stage.playerButton, height: stage.playerButton, borderRadius: stage.playerButton / 2 }]}
+          accessibilityRole="button"
+          accessibilityLabel={isPlaying ? "Pause" : "Play"}
         >
+          {rim("play")}
           {isPlaying ? (
-            <Pause size={30} color="#160B08" fill="#160B08" />
+            <Pause size={Math.round(stage.u * 6.4)} color="#160B08" fill="#160B08" />
           ) : (
-            <Play size={30} color="#160B08" fill="#160B08" style={{ marginLeft: 3 }} />
+            <Play size={Math.round(stage.u * 6.4)} color="#160B08" fill="#160B08" style={{ marginLeft: 4 }} />
           )}
         </Pressable>
         <Pressable
           onPress={() => props.onSkip(10)}
-          onFocus={() => setFocused("fwd10")}
-          onBlur={() => setFocused(null)}
-          style={[styles.skipBtn, focusStyle("fwd10")]}
+          onFocus={() => handleFocus("fwd10")}
+          onBlur={handleBlur}
+          style={styles.skipBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Forward 10 seconds"
         >
-          <RotateCw size={24} color={palette.textPrimary} />
-          <Text style={styles.skipLabel}>10</Text>
+          {rim("fwd10")}
+          <RotateCw size={Math.round(stage.u * 5)} color={palette.textPrimary} />
+          <Text style={[styles.skipLabel, { fontSize: metaSize }]}>10</Text>
         </Pressable>
       </View>
 
       {/* Bottom: seek + actions */}
-      <View style={styles.bottomStack}>
+      <View style={[styles.bottomStack, { paddingHorizontal: stage.gutter, paddingBottom: stage.gutter }]}>
         <View style={styles.seekRow}>
-          <Text style={styles.timeLabel}>{fmt(shown)}</Text>
-          <View
-            style={styles.trackHit}
-            onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-            {...pan.panHandlers}
-          >
+          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 9) }]}>{fmt(shown)}</Text>
+          <View style={styles.trackHit} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)} {...pan.panHandlers}>
             <View style={styles.track}>
               <View style={[styles.trackBuffered, { width: `${bufferedPct * 100}%` }]} />
               <View style={[styles.trackElapsed, { width: `${pct * 100}%` }]} />
               <View style={[styles.thumb, { left: `${pct * 100}%` }]} />
             </View>
           </View>
-          <Text style={styles.timeLabel}>{total > 0 ? fmt(total) : "--:--"}</Text>
+          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 9) }]}>
+            {total > 0 ? fmt(total) : "--:--"}
+          </Text>
         </View>
-        <View style={styles.actionsRow}>
+        <View style={[styles.actionsRow, { gap: stage.cardGap }]}>
           <Pressable
             onPress={props.onSpeed}
-            onFocus={() => setFocused("speed")}
-            onBlur={() => setFocused(null)}
-            style={[styles.pill, focusStyle("speed")]}
+            onFocus={() => handleFocus("speed")}
+            onBlur={handleBlur}
+            style={styles.pill}
+            accessibilityRole="button"
+            accessibilityLabel="Playback speed"
           >
-            <Text style={[styles.pillText, props.rate !== 1 && { color: palette.accent }]}>
+            {rim("speed")}
+            <Text style={[styles.pillText, { fontSize: pillSize }, props.rate !== 1 && { color: palette.accent }]}>
               {props.rate === 1 ? "1×" : `${props.rate}×`}
             </Text>
           </Pressable>
           <Pressable
             onPress={props.onSubtitles}
-            onFocus={() => setFocused("subs")}
-            onBlur={() => setFocused(null)}
-            style={[styles.pill, focusStyle("subs")]}
+            onFocus={() => handleFocus("subs")}
+            onBlur={handleBlur}
+            style={styles.pill}
+            accessibilityRole="button"
+            accessibilityLabel="Subtitles and audio"
           >
-            <Subtitles size={14} color={props.subtitleLabel ? palette.accent : palette.textSecondary} />
-            <Text style={[styles.pillText, props.subtitleLabel && { color: palette.accent }]}>
+            {rim("subs")}
+            <Subtitles size={Math.round(stage.u * 2.6)} color={props.subtitleLabel ? palette.accent : palette.textSecondary} />
+            <Text style={[styles.pillText, { fontSize: pillSize }, props.subtitleLabel && { color: palette.accent }]}>
               {props.subtitleLabel ?? "Subtitles"}
             </Text>
           </Pressable>
           <Pressable
             onPress={props.onQuality}
-            onFocus={() => setFocused("quality")}
-            onBlur={() => setFocused(null)}
-            style={[styles.pill, focusStyle("quality")]}
+            onFocus={() => handleFocus("quality")}
+            onBlur={handleBlur}
+            style={styles.pill}
+            accessibilityRole="button"
+            accessibilityLabel="Quality"
           >
-            <Gauge size={14} color={palette.textSecondary} />
-            <Text style={styles.pillText}>{props.quality ?? "Auto"}</Text>
+            {rim("quality")}
+            <Gauge size={Math.round(stage.u * 2.6)} color={palette.textSecondary} />
+            <Text style={[styles.pillText, { fontSize: pillSize }]}>{props.quality ?? "Auto"}</Text>
           </Pressable>
           {props.hasNextEpisode ? (
             <Pressable
               onPress={props.onNextEpisode}
-              onFocus={() => setFocused("next")}
-              onBlur={() => setFocused(null)}
-              style={[styles.pill, focusStyle("next")]}
+              onFocus={() => handleFocus("next")}
+              onBlur={handleBlur}
+              style={styles.pill}
+              accessibilityRole="button"
+              accessibilityLabel="Next episode"
             >
-              <SkipForward size={14} color={palette.accent} />
-              <Text style={[styles.pillText, { color: palette.accent }]}>Next episode</Text>
+              {rim("next")}
+              <SkipForward size={Math.round(stage.u * 2.6)} color={palette.accent} />
+              <Text style={[styles.pillText, { fontSize: pillSize, color: palette.accent }]}>Next episode</Text>
             </Pressable>
           ) : null}
         </View>
@@ -232,40 +292,30 @@ export function PlayerControls(props: PlayerControlsProps) {
 
 const styles = StyleSheet.create({
   chrome: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between" },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-  },
+  topBar: { flexDirection: "row", alignItems: "center", gap: 12 },
   circleBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
     backgroundColor: "rgba(10,12,16,0.62)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(235,242,248,0.14)",
     alignItems: "center",
     justifyContent: "center",
   },
-  titleText: { color: palette.textPrimary, fontSize: 16, fontWeight: "700" },
-  episodeText: { color: palette.textMuted, fontSize: 12, marginTop: 1 },
+  titleText: { color: palette.textPrimary, fontWeight: "700" },
+  episodeText: { color: palette.textMuted, marginTop: 1 },
   transportPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
     backgroundColor: "rgba(10,12,16,0.62)",
-    borderRadius: radius.pill,
+    borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  transportText: { color: palette.textMuted, fontSize: 11, fontWeight: "600" },
+  transportText: { color: palette.textMuted, fontWeight: "600" },
   centerRow: { ...StyleSheet.absoluteFillObject, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 36 },
-  skipBtn: { alignItems: "center", justifyContent: "center", padding: 10, borderRadius: radius.md },
-  skipLabel: { color: palette.textPrimary, fontSize: 9, fontWeight: "800", marginTop: -3 },
+  skipBtn: { alignItems: "center", justifyContent: "center", padding: 12, borderRadius: 16 },
+  skipLabel: { color: palette.textPrimary, fontWeight: "800", marginTop: -3 },
   playBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
     backgroundColor: palette.accent,
     alignItems: "center",
     justifyContent: "center",
@@ -275,8 +325,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 8,
   },
-  bottomStack: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl, gap: spacing.md },
-  seekRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  bottomStack: { gap: 12 },
+  seekRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   trackHit: { flex: 1, paddingVertical: 12 },
   track: {
     height: 4,
@@ -302,17 +352,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 4,
   },
-  timeLabel: { color: palette.textPrimary, fontSize: 11, fontVariant: ["tabular-nums"], minWidth: 44, textAlign: "center" },
-  actionsRow: { flexDirection: "row", gap: spacing.sm, justifyContent: "center" },
+  timeLabel: { color: palette.textPrimary, fontVariant: ["tabular-nums"], textAlign: "center" },
+  actionsRow: { flexDirection: "row", justifyContent: "center", flexWrap: "wrap" },
   pill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     backgroundColor: "rgba(10,12,16,0.62)",
-    borderRadius: radius.pill,
+    borderRadius: 999,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 9,
   },
-  pillText: { color: palette.textPrimary, fontSize: 12, fontWeight: "700" },
-  focused: { borderWidth: 2, borderColor: palette.accent, borderRadius: radius.pill, backgroundColor: "rgba(240,120,85,0.18)" },
+  pillText: { color: palette.textPrimary, fontWeight: "700" },
 });

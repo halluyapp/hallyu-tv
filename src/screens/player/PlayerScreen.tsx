@@ -1,5 +1,9 @@
+import { motion, springs } from "@/design-system/motion";
 import { palette, spacing } from "@/design-system/tokens";
-import { Platform } from "react-native";
+import { useStage } from "@/hooks/useStage";
+import { pickAdaptiveSource, shouldDownshift } from "@/services/player/playbackPolicy";
+import { prefetchStreams, takePrefetched } from "@/services/provider/prefetch";
+import { AppState, PanResponder, Platform } from "react-native";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchCaptions, fetchCaptionText, resolveStreams } from "@/services/provider/adapter";
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
@@ -42,6 +46,19 @@ export function PlayerScreen() {
   const { play } = useSound();
   const insets = useSafeAreaInsets();
   const isTV = Platform.isTV;
+  const stage = useStage();
+  const chromeY = useRef(new Animated.Value(0)).current;
+  const chromeFocusCount = useRef(0);
+  const stallTimesRef = useRef<number[]>([]);
+  const holdRateRef = useRef(1);
+  const autoNextCancelledRef = useRef(false);
+  const lastTapRef = useRef<{ at: number; zone: "left" | "center" | "right" } | null>(null);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressActiveRef = useRef(false);
+  const [gestureHint, setGestureHint] = useState<string | null>(null);
+  const [subtitleScale, setSubtitleScale] = useState(1);
+  const [nextCountdown, setNextCountdown] = useState<number | null>(null);
 
   useKeepAwake();
 
@@ -90,7 +107,9 @@ export function PlayerScreen() {
   const startAt = Math.max(0, resumeAt);
   const initialSource = useMemo(() => (source ? videoSourceFor(source) : null), []); // eslint-disable-line react-hooks/exhaustive-deps
   const player = useVideoPlayer(initialSource, (p) => {
-    p.timeUpdateEventInterval = 0.5;
+    p.timeUpdateEventInterval = 0.25;
+    // Buffer for a real network: keep a runway, but start fast.
+    p.bufferOptions = { preferredForwardBufferDuration: 24, minBufferForPlayback: 2 };
     p.currentTime = startAt;
     if (initialSource) {
       p.playbackRate = 1;
@@ -170,7 +189,12 @@ export function PlayerScreen() {
       try {
         const res = await resolveStreams(subjectId, detailPath, season, episode);
         setAvailableSources(res.sources);
-        const picked = pickRecoverySource(res.sources, state.triedUrls, current.resolution);
+        const now = Date.now();
+        stallTimesRef.current = stallTimesRef.current.filter((at) => now - at <= 90_000);
+        const downshift = shouldDownshift(stallTimesRef.current, now);
+        const picked =
+          (downshift ? pickAdaptiveSource(res.sources, current.resolution, 1) : null) ??
+          pickRecoverySource(res.sources, state.triedUrls, current.resolution);
         if (!picked) {
           showError(kind, detail ?? playerErrorMessage(kind));
           return;
@@ -195,6 +219,8 @@ export function PlayerScreen() {
     captionSeqRef.current += 1;
     recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
     lastSavedRef.current = 0;
+    autoNextCancelledRef.current = false;
+    setNextCountdown(null);
     setAvailableSources(sources);
     setTracks(null);
     setActiveTrack(null);
@@ -266,7 +292,10 @@ export function PlayerScreen() {
   useEffect(() => {
     if (!buffering || status === "error") return;
     const t = setTimeout(() => {
-      if (sourceRef.current) void recover("buffering_timeout", null);
+      if (sourceRef.current) {
+        stallTimesRef.current.push(Date.now());
+        void recover("buffering_timeout", null);
+      }
     }, BUFFER_STALL_TIMEOUT_MS);
     return () => clearTimeout(t);
   }, [buffering, status, recover]);
@@ -301,6 +330,13 @@ export function PlayerScreen() {
     if (activeTrack) setCurrentCue(cueAt(cues, player.currentTime * 1000, subtitleOffset * 1000));
   }, [cues, subtitleOffset, activeTrack, player]);
 
+  // Warm the next episode while this one is still playing.
+  useEffect(() => {
+    if (!nextEpisode || duration <= 0) return;
+    if (position / duration < 0.8) return;
+    prefetchStreams(subjectId, detailPath, nextEpisode.season, nextEpisode.episode);
+  }, [nextEpisode, duration, position, subjectId, detailPath]);
+
   // Save on unmount.
   const saveOnExitRef = useRef<() => void>(() => {});
   saveOnExitRef.current = () => {
@@ -323,6 +359,22 @@ export function PlayerScreen() {
   };
   useEffect(() => () => saveOnExitRef.current(), []);
   useEffect(() => () => captionAbortRef.current?.abort(), []);
+
+  // Leaving the app pauses playback (unless picture-in-picture is active).
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" && !pipActive) player.pause();
+    });
+    return () => sub.remove();
+  }, [player, pipActive]);
+
+  useEffect(
+    () => () => {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    },
+    [],
+  );
 
   const loadCaptions = useCallback(async () => {
     if (tracks !== null || tracksLoading) return;
@@ -369,14 +421,21 @@ export function PlayerScreen() {
 
   const showControls = useCallback(() => {
     setControlsVisible(true);
-    Animated.timing(controlsOpacity, { toValue: 1, duration: 150, useNativeDriver: true }).start();
+    Animated.parallel([
+      Animated.timing(controlsOpacity, { toValue: 1, duration: motion.fast, useNativeDriver: true }),
+      Animated.spring(chromeY, { toValue: 0, useNativeDriver: true, ...springs.chrome }),
+    ]).start();
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = setTimeout(() => {
-      if (player.playing) {
-        Animated.timing(controlsOpacity, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => setControlsVisible(false));
+      // Never vanish while the remote is on the chrome.
+      if (player.playing && chromeFocusCount.current === 0) {
+        Animated.parallel([
+          Animated.timing(controlsOpacity, { toValue: 0, duration: motion.normal, useNativeDriver: true }),
+          Animated.timing(chromeY, { toValue: 64, duration: motion.normal, useNativeDriver: true }),
+        ]).start(() => setControlsVisible(false));
       }
-    }, 3200);
-  }, [player, controlsOpacity]);
+    }, 3400);
+  }, [player, controlsOpacity, chromeY]);
 
   useEffect(() => {
     showControls();
@@ -399,6 +458,78 @@ export function PlayerScreen() {
     else player.play();
     showControls();
   }, [player, showControls]);
+
+  /** Gestures: double-tap a side to seek, double-tap centre to play/pause, hold for 2×. */
+  const gesture = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_event, state) => Math.abs(state.dx) > 10 || Math.abs(state.dy) > 10,
+        onPanResponderGrant: () => {
+          holdRateRef.current = rateRef.current;
+          longPressActiveRef.current = false;
+          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = setTimeout(() => {
+            longPressActiveRef.current = true;
+            player.playbackRate = 2;
+            setRate(2);
+            setGestureHint("2× speed");
+          }, 480);
+        },
+        onPanResponderRelease: (event, state) => {
+          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+          if (longPressActiveRef.current) {
+            longPressActiveRef.current = false;
+            player.playbackRate = holdRateRef.current;
+            setRate(holdRateRef.current);
+            setGestureHint(null);
+            return;
+          }
+          if (Math.abs(state.dx) > 12 || Math.abs(state.dy) > 12) return;
+
+          const x = event.nativeEvent.pageX;
+          const zone = x < stage.width * 0.32 ? "left" : x > stage.width * 0.68 ? "right" : "center";
+          const now = Date.now();
+          const last = lastTapRef.current;
+
+          if (last && last.zone === zone && now - last.at <= 320) {
+            lastTapRef.current = null;
+            if (tapTimerRef.current) {
+              clearTimeout(tapTimerRef.current);
+              tapTimerRef.current = null;
+            }
+            if (zone === "left") {
+              skip(-10);
+              setGestureHint("− 10 seconds");
+            } else if (zone === "right") {
+              skip(10);
+              setGestureHint("+ 10 seconds");
+            } else {
+              togglePlay();
+              setGestureHint("Play / pause");
+            }
+            setTimeout(() => setGestureHint(null), 650);
+            return;
+          }
+
+          lastTapRef.current = { at: now, zone };
+          if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+          tapTimerRef.current = setTimeout(() => {
+            lastTapRef.current = null;
+            showControls();
+          }, 260);
+        },
+        onPanResponderTerminate: () => {
+          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+          if (longPressActiveRef.current) {
+            longPressActiveRef.current = false;
+            player.playbackRate = holdRateRef.current;
+            setRate(holdRateRef.current);
+          }
+        },
+      }),
+    [player, skip, stage.width, togglePlay, showControls],
+  );
 
   const setPlaybackRate = useCallback(
     (next: number) => {
@@ -443,10 +574,30 @@ export function PlayerScreen() {
       season: nextEpisode.season,
       episode: nextEpisode.episode,
       resumeAt: 0,
-      sources: [],
+      sources: takePrefetched(subjectId, detailPath, nextEpisode.season, nextEpisode.episode)?.sources ?? [],
       nextEpisode: nextEpisode.season === season ? { season, episode: nextEpisode.episode + 1 } : null,
     });
   }, [navigation, subjectId, detailPath, title, mediaType, season, nextEpisode, route.params.posterUrl]);
+
+  // Up-next card: eight seconds, cancellable, only near the very end.
+  useEffect(() => {
+    if (!nextEpisode || status !== "ready" || duration <= 0) return;
+    if (autoNextCancelledRef.current) return;
+    if (nextCountdown !== null) return;
+    if (position / duration < 0.94) return;
+    setNextCountdown(8);
+  }, [nextEpisode, status, duration, position, nextCountdown]);
+
+  useEffect(() => {
+    if (nextCountdown === null) return;
+    if (nextCountdown <= 0) {
+      setNextCountdown(null);
+      goNextEpisode();
+      return;
+    }
+    const timer = setTimeout(() => setNextCountdown((value) => (value === null ? null : value - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [nextCountdown, goNextEpisode]);
 
   const switchSource = useCallback(
     (next: StreamSource) => {
@@ -503,7 +654,7 @@ export function PlayerScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: isTV ? 0 : insets.top, paddingBottom: isTV ? 0 : insets.bottom }]}>
-      <Pressable style={StyleSheet.absoluteFill} onPress={showControls}>
+      <View style={StyleSheet.absoluteFill} {...gesture.panHandlers}>
         <VideoView
           player={player}
           style={StyleSheet.absoluteFill}
@@ -514,11 +665,48 @@ export function PlayerScreen() {
           onPictureInPictureStart={() => setPipActive(true)}
           onPictureInPictureStop={() => setPipActive(false)}
         />
-      </Pressable>
+      </View>
 
       {activeTrack && currentCue ? (
-        <View style={[styles.subtitleOverlay, { bottom: controlsVisible ? 110 : 48 }]} pointerEvents="none">
-          <Text style={styles.subtitleText}>{currentCue.text}</Text>
+        <View
+          style={[styles.subtitleOverlay, { bottom: controlsVisible ? stage.subtitleSize * 5.4 : stage.subtitleSize * 2.4 }]}
+          pointerEvents="none"
+        >
+          <Text style={[styles.subtitleText, { fontSize: stage.subtitleSize * subtitleScale }]}>{currentCue.text}</Text>
+        </View>
+      ) : null}
+
+      {gestureHint ? (
+        <View style={styles.gestureHint} pointerEvents="none">
+          <Text style={styles.gestureHintText}>{gestureHint}</Text>
+        </View>
+      ) : null}
+
+      {nextCountdown !== null && status !== "error" ? (
+        <View style={[styles.nextCard, { right: stage.gutter, bottom: stage.subtitleSize * 6.4 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.nextLabel}>Next episode</Text>
+            <Text style={styles.nextCount}>Starts in {nextCountdown}s</Text>
+          </View>
+          <Pressable
+            style={styles.nextPlay}
+            onPress={goNextEpisode}
+            accessibilityRole="button"
+            accessibilityLabel="Play next episode now"
+          >
+            <Text style={styles.nextPlayText}>Play now</Text>
+          </Pressable>
+          <Pressable
+            style={styles.nextCancel}
+            onPress={() => {
+              autoNextCancelledRef.current = true;
+              setNextCountdown(null);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel next episode"
+          >
+            <Text style={styles.nextCancelText}>Cancel</Text>
+          </Pressable>
         </View>
       ) : null}
 
@@ -549,7 +737,10 @@ export function PlayerScreen() {
       ) : null}
 
       {controlsVisible && status !== "error" && !pipActive ? (
-        <Animated.View style={[styles.chromeWrap, { opacity: controlsOpacity }]} pointerEvents="box-none">
+        <Animated.View
+          style={[styles.chromeWrap, { opacity: controlsOpacity, transform: [{ translateY: chromeY }] }]}
+          pointerEvents="box-none"
+        >
           <PlayerControls
             title={title}
             episodeLabel={episodeLabel}
@@ -562,7 +753,11 @@ export function PlayerScreen() {
             subtitleLabel={nativeSubtitleId ? "Embedded" : activeTrack ? activeTrack.languageName : null}
             rate={rate}
             hasNextEpisode={Boolean(nextEpisode)}
-            isTV={isTV}
+            stage={stage}
+            onFocusChange={(focused) => {
+              chromeFocusCount.current = focused ? 1 : 0;
+              if (!focused) showControls();
+            }}
             onTogglePlay={togglePlay}
             onSkip={skip}
             onSeek={(t) => {
@@ -570,13 +765,20 @@ export function PlayerScreen() {
               showControls();
             }}
             onBack={() => navigation.goBack()}
-            onQuality={() => setQualityPickerOpen(true)}
+            onQuality={() => {
+              chromeFocusCount.current = 0;
+              setQualityPickerOpen(true);
+            }}
             onSubtitles={() => {
+              chromeFocusCount.current = 0;
               refreshNativeTracks();
               void loadCaptions();
               setSubtitlePickerOpen(true);
             }}
-            onSpeed={() => setSpeedPickerOpen(true)}
+            onSpeed={() => {
+              chromeFocusCount.current = 0;
+              setSpeedPickerOpen(true);
+            }}
             onNextEpisode={goNextEpisode}
           />
         </Animated.View>
@@ -606,6 +808,8 @@ export function PlayerScreen() {
             activeId={activeTrack?.id ?? null}
             offset={subtitleOffset}
             onOffset={setSubtitleOffset}
+            scale={subtitleScale}
+            onScale={setSubtitleScale}
             onPick={(t) => {
               if (nativeSubtitleId) pickNativeSubtitle(null);
               void selectTrack(t);
@@ -673,4 +877,34 @@ const styles = StyleSheet.create({
   },
   errorBtnText: { color: palette.textPrimary, fontWeight: "800", fontSize: 14 },
   pickerNote: { color: palette.textMuted, fontSize: 12, textAlign: "center", marginTop: spacing.xs },
+  gestureHint: {
+    position: "absolute",
+    alignSelf: "center",
+    top: "42%",
+    backgroundColor: "rgba(8,10,13,0.82)",
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  gestureHintText: { color: palette.textPrimary, fontSize: 14, fontWeight: "700" },
+  nextCard: {
+    position: "absolute",
+    minWidth: 280,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "rgba(16,21,27,0.92)",
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 18,
+    padding: 14,
+  },
+  nextLabel: { color: palette.textMuted, fontSize: 11, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
+  nextCount: { color: palette.textPrimary, fontSize: 15, fontWeight: "700", marginTop: 2 },
+  nextPlay: { backgroundColor: palette.accent, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  nextPlayText: { color: "#160B08", fontWeight: "800", fontSize: 12 },
+  nextCancel: { paddingHorizontal: 6, paddingVertical: 8 },
+  nextCancelText: { color: palette.textSecondary, fontSize: 12, fontWeight: "700" },
 });

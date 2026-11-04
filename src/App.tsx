@@ -2,6 +2,7 @@ import { palette } from "@/design-system/tokens";
 import { RootNavigator } from "@/navigation/RootNavigator";
 import { LibraryProvider } from "@/state/LibraryContext";
 import { SoundProvider } from "@/services/sound/SoundContext";
+import { DisplayModeProvider } from "@/state/DisplayModeContext";
 import { hasCompletedOnboarding } from "@/utils/onboarding";
 import { DarkTheme, NavigationContainer } from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
@@ -69,11 +70,13 @@ export default function App() {
         <View style={styles.root}>
           <StatusBar style="light" />
           <NavigationContainer theme={theme}>
-            <SoundProvider>
-              <LibraryProvider>
-                <RootNavigator showOnboarding={showOnboarding} />
-              </LibraryProvider>
-            </SoundProvider>
+            <DisplayModeProvider>
+              <SoundProvider>
+                <LibraryProvider>
+                  <RootNavigator showOnboarding={showOnboarding} />
+                </LibraryProvider>
+              </SoundProvider>
+            </DisplayModeProvider>
           </NavigationContainer>
         </View>
       </SafeAreaProvider>

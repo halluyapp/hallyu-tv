@@ -68,6 +68,8 @@ export function SubtitleOptions({
   activeId,
   offset,
   onOffset,
+  scale,
+  onScale,
   onPick,
   onOff,
   onRetry,
@@ -78,6 +80,8 @@ export function SubtitleOptions({
   activeId: string | null;
   offset: number;
   onOffset: (v: number) => void;
+  scale: number;
+  onScale: (v: number) => void;
   onPick: (t: CaptionTrack) => void;
   onOff: () => void;
   onRetry?: () => void;
@@ -116,6 +120,22 @@ export function SubtitleOptions({
             thumbTintColor={palette.accent}
             onValueChange={onOffset}
           />
+          <View style={styles.sizeRow}>
+            <Text style={styles.optionMeta}>Text size</Text>
+            <View style={{ flexDirection: "row", gap: spacing.sm }}>
+              {[0.85, 1, 1.15, 1.3].map((value) => (
+                <Pressable
+                  key={value}
+                  style={[styles.sizeChip, Math.abs(scale - value) < 0.01 && styles.optionActive]}
+                  onPress={() => onScale(value)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Subtitle size ${Math.round(value * 100)} percent`}
+                >
+                  <Text style={[styles.sizeChipText, { fontSize: 11 + value * 5 }]}>A</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
         </View>
       ) : null}
       {error ? (
@@ -246,6 +266,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   optionActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.10)" },
+  sizeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.md },
+  sizeChip: {
+    minWidth: 40,
+    height: 34,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: palette.glassFill,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sizeChipText: { color: palette.textPrimary, fontWeight: "700" },
   optionTitle: { color: palette.textPrimary, fontWeight: "700", fontSize: 15 },
   optionMeta: { color: palette.textMuted, fontSize: 12 },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm },

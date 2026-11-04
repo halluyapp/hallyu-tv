@@ -10,9 +10,10 @@ import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
 import { useSound } from "@/services/sound/SoundContext";
+import { useStage } from "@/hooks/useStage";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Platform, StyleSheet } from "react-native";
+import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Home, Compass, Download, User } from "lucide-react-native";
 import type { StreamSource } from "@/types/provider";
@@ -118,7 +119,8 @@ function MainTabs() {
  * tabs. Neither requires an account, pairing, or another device.
  */
 export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
-  if (Platform.isTV) {
+  const stage = useStage();
+  if (stage.remote) {
     return (
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
         <Stack.Screen name="TvHome" component={TvHomeScreen} />

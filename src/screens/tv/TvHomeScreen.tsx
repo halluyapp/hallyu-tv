@@ -1,131 +1,160 @@
-import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
-import { APP_NAME } from "@/config/branding";
-import { Poster, initialsFor } from "@/components/ui/Poster";
+import { StageRail, type RailEntry } from "@/components/stage/StageRail";
+import { HeroStage } from "@/components/tv/HeroStage";
+import { TvSpine, type SpineItem } from "@/components/tv/TvSpine";
+import { EmptyState, ErrorState } from "@/components/ui/States";
+import { stagger } from "@/design-system/motion";
+import type { Stage } from "@/design-system/stage";
+import { palette } from "@/design-system/tokens";
+import { useStage } from "@/hooks/useStage";
 import { RootStackParamList } from "@/navigation/RootNavigator";
-import { fetchHome } from "@/services/provider/adapter";
-import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
+import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
 import { useLibrary, type LibraryTitle, type ProgressRow } from "@/state/LibraryContext";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { ProviderError, type HomeSection } from "@/types/provider";
 import { useNavigation } from "@react-navigation/native";
-import { Search, RefreshCw, Download, Home as HomeIcon } from "lucide-react-native";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { Download, Home as HomeIcon, Search } from "lucide-react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
-
-const TILE_WIDTH = 170;
-const TILE_PITCH = TILE_WIDTH + spacing.lg;
+type Open = (detailPath: string, subjectId: string) => void;
 
 /**
- * 10-foot TV home: a focusable side rail (Home / Search / Downloads) beside
- * hero + catalogue rails. Rows are virtualized and d-pad focus auto-scrolls
- * the rail so the focused tile is always in view.
+ * The Stage — the 10-foot home.
+ *
+ * Everything here is measured from `useStage()`, so a 55" panel driven by an
+ * Android box gets television proportions instead of a phone layout stretched
+ * over glass. The spine carries identity; the wall carries the catalogue.
  */
 export function TvHomeScreen() {
+  const stage = useStage();
   const navigation = useNavigation<Nav>();
   const { progress, watchlist } = useLibrary();
+
   const [sections, setSections] = useState<HomeSection[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [railFocused, setRailFocused] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      setSections(await fetchHome());
+      setSections(await loadHome());
     } catch (err) {
       setLoadError(err instanceof ProviderError ? err.message : "The catalogue could not be loaded.");
     }
+  }, []);
+
+  // Instant paint from the last known catalogue, then revalidate.
+  useEffect(() => {
+    let mounted = true;
+    void hydrateHome().then((cached) => {
+      if (mounted && cached) setSections(cached);
+    });
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const open = (detailPath: string, subjectId: string) => {
-    navigation.navigate("Details", { detailPath, subjectId });
-  };
+  const open = useCallback<Open>(
+    (detailPath, subjectId) => navigation.navigate("Details", { detailPath, subjectId }),
+    [navigation],
+  );
 
-  const hero = sections?.find((s) => s.section === "Banner")?.items[0] ?? sections?.[0]?.items[0] ?? null;
-  const rails = (sections ?? []).filter((s) => s.items.length > 0 && s.section !== "Banner");
-  const resume = progress.filter((p) => !p.completed && p.position_seconds > 5).slice(0, 20);
+  const heroes = useMemo(() => {
+    const banner = (sections ?? []).find((section) => section.section === "Banner")?.items ?? [];
+    const everything = (sections ?? []).flatMap((section) => section.items);
+    const seen = new Set<string>();
+    return [...banner, ...everything]
+      .filter((item) => (seen.has(item.subjectId) ? false : (seen.add(item.subjectId), true)))
+      .slice(0, 4);
+  }, [sections]);
 
-  const railItems: { key: string; label: string; icon: typeof Search; onPress: () => void }[] = [
-    { key: "home", label: "Home", icon: HomeIcon, onPress: () => {} },
-    { key: "search", label: "Search", icon: Search, onPress: () => navigation.navigate("TvSearch") },
-    { key: "downloads", label: "Downloads", icon: Download, onPress: () => navigation.navigate("TvDownloads") },
-  ];
+  const rails = useMemo(
+    () => (sections ?? []).filter((section) => section.items.length > 0 && section.section !== "Banner"),
+    [sections],
+  );
+
+  const resume = useMemo(
+    () => progress.filter((row) => !row.completed && row.position_seconds > 5).slice(0, 20),
+    [progress],
+  );
+
+  const resumeEntries = useMemo(() => resume.map((row) => toResumeEntry(row, open)), [resume, open]);
+  const watchlistEntries = useMemo(
+    () => watchlist.map((item) => toLibraryEntry(item, open)),
+    [watchlist, open],
+  );
+
+  const spineItems = useMemo<SpineItem[]>(
+    () => [
+      { key: "home", label: "Home", icon: HomeIcon, onPress: () => {} },
+      { key: "search", label: "Search", icon: Search, onPress: () => navigation.navigate("TvSearch") },
+      { key: "downloads", label: "Downloads", icon: Download, onPress: () => navigation.navigate("TvDownloads") },
+    ],
+    [navigation],
+  );
+
+  const empty = sections !== null && heroes.length === 0 && rails.length === 0;
 
   return (
     <View style={styles.root}>
-      <View style={styles.bodyRow}>
-        {/* Side rail */}
-        <View style={styles.sideRail}>
-          <Text style={styles.brand}>{APP_NAME.toUpperCase()}</Text>
-          <Text style={styles.tagline}>The big screen, on its own terms</Text>
-          <View style={styles.railNav}>
-            {railItems.map((item) => {
-              const Icon = item.icon;
-              const active = railFocused === item.key;
-              return (
-                <Pressable
-                  key={item.key}
-                  onPress={item.onPress}
-                  onFocus={() => setRailFocused(item.key)}
-                  onBlur={() => setRailFocused(null)}
-                  hasTVPreferredFocus={item.key === "home"}
-                  style={[styles.railBtn, active && styles.railBtnActive]}
-                >
-                  <Icon size={17} color={active ? "#160B08" : palette.textPrimary} />
-                  <Text style={[styles.railBtnLabel, active && styles.railBtnLabelActive]}>{item.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+      <View style={styles.body}>
+        <TvSpine stage={stage} items={spineItems} active="home" />
 
-        {/* Content */}
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: spacing.xxl }} style={styles.content}>
-          {hero ? (
-            <Pressable onPress={() => open(hero.slug, hero.subjectId)} style={styles.hero}>
-              <Poster uri={hero.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(hero.name)} />
-              <View style={styles.heroScrim} />
-              <View style={styles.heroContent}>
-                <Text style={styles.heroBadge}>Featured</Text>
-                <Text numberOfLines={2} style={styles.heroTitle}>{hero.name}</Text>
-                <Text style={styles.heroMeta}>
-                  {[hero.year, hero.genre, hero.rating && `★ ${hero.rating}`].filter(Boolean).join(" · ")}
-                </Text>
-                <View style={styles.heroPlay}>
-                  <Text style={styles.heroPlayText}>Open</Text>
-                </View>
-              </View>
-            </Pressable>
+        <ScrollView
+          style={styles.wall}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{
+            paddingTop: stage.gutter * 0.8,
+            paddingBottom: stage.gutter * 2,
+          }}
+        >
+          {loadError && sections === null ? (
+            <ErrorState message={loadError} onRetry={() => void load()} />
           ) : null}
 
-          {resume.length > 0 ? (
-            <ProgressRowView label="Continue watching" items={resume} onOpen={(item) => item.detail_path && open(item.detail_path, item.subject_id)} />
+          {sections === null && !loadError ? <LoadingStage stage={stage} /> : null}
+
+          {empty ? (
+            <EmptyState title="Nothing here yet" message="The catalogue is empty right now. Try again in a moment." />
           ) : null}
 
-          {rails.map((s) => (
-            <Rail key={s.section} label={sectionLabel(s.section)} items={s.items} onOpen={(item) => open(item.slug, item.subjectId)} />
+          {heroes.length > 0 ? (
+            <HeroStage items={heroes} stage={stage} onOpen={(item) => open(item.slug, item.subjectId)} />
+          ) : null}
+
+          {resumeEntries.length > 0 ? (
+            <StageRail label="Continue watching" entries={resumeEntries} stage={stage} delay={40} preferredFocus />
+          ) : null}
+
+          {rails.map((section, index) => (
+            <StageRail
+              key={section.section}
+              label={sectionLabel(section.section)}
+              stage={stage}
+              delay={60 + index * stagger}
+              preferredFocus={resumeEntries.length === 0 && index === 0}
+              entries={section.items.map((item) => ({
+                key: `${section.section}_${item.subjectId}`,
+                posterUrl: item.posterUrl,
+                title: item.name,
+                meta: [item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · "),
+                progress: null,
+                onPress: () => open(item.slug, item.subjectId),
+              }))}
+            />
           ))}
 
-          {watchlist.length > 0 ? (
-            <LibraryRow label="Watchlist" items={watchlist} onOpen={(item) => item.detail_path && open(item.detail_path, item.subject_id)} />
-          ) : null}
-
-          {loadError ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorTitle}>{loadError}</Text>
-              <Pressable onPress={() => void load()} style={[styles.pillBtn, { marginTop: spacing.md }]}>
-                <RefreshCw size={15} color={palette.textPrimary} />
-                <Text style={styles.pillBtnText}>Retry</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {!sections && !loadError ? (
-            <ActivityIndicator style={{ marginTop: spacing.xxl }} size="large" color={palette.accent} />
+          {watchlistEntries.length > 0 ? (
+            <StageRail
+              label="Watchlist"
+              entries={watchlistEntries}
+              stage={stage}
+              delay={60 + rails.length * stagger}
+            />
           ) : null}
         </ScrollView>
       </View>
@@ -133,222 +162,96 @@ export function TvHomeScreen() {
   );
 }
 
+function toResumeEntry(row: ProgressRow, open: Open): RailEntry {
+  const percent =
+    row.duration_seconds > 0 ? Math.round((row.position_seconds / row.duration_seconds) * 100) : null;
+  return {
+    key: `${row.subject_id}_${row.season_number ?? 0}_${row.episode_number ?? 0}`,
+    posterUrl: row.poster_url,
+    title: row.title,
+    meta:
+      row.media_type === "series"
+        ? `S${row.season_number ?? 1} · E${row.episode_number ?? 1}`
+        : "Movie",
+    progress: percent,
+    onPress: () => {
+      if (row.detail_path) open(row.detail_path, row.subject_id);
+    },
+  };
+}
+
+function toLibraryEntry(item: LibraryTitle, open: Open): RailEntry {
+  return {
+    key: item.subject_id,
+    posterUrl: item.poster_url,
+    title: item.title,
+    meta: item.media_type === "series" ? "Series" : "Movie",
+    progress: null,
+    onPress: () => {
+      if (item.detail_path) open(item.detail_path, item.subject_id);
+    },
+  };
+}
+
 function sectionLabel(raw: string): string {
-  const t = raw.replace(/[_-]+/g, " ").trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
+  const spaced = raw.replace(/[_-]+/g, " ").trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-/** Horizontal rail that keeps the d-pad-focused tile inside the viewport. */
-function Rail({ label, items, onOpen }: { label: string; items: CatalogueItem[]; onOpen: (item: CatalogueItem) => void }) {
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
-  const listRef = useRef<FlatList<CatalogueItem> | null>(null);
-
-  const onFocusTile = (idx: number) => {
-    setFocusedIdx(idx);
-    if (idx >= 2) listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.25 });
-  };
-
+function LoadingStage({ stage }: { stage: Stage }) {
   return (
-    <View style={{ marginBottom: spacing.xl }}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <FlatList
-        ref={listRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.row}
-        data={items}
-        keyExtractor={(item) => `${item.subjectId}_${item.slug}`}
-        getItemLayout={(_, index) => ({ length: TILE_PITCH, offset: TILE_PITCH * index, index })}
-        windowSize={5}
-        initialNumToRender={8}
-        maxToRenderPerBatch={10}
-        removeClippedSubviews
-        onScrollToIndexFailed={(info) => {
-          listRef.current?.scrollToOffset({ offset: Math.max(0, info.index * TILE_PITCH - 100), animated: true });
+    <View>
+      <View
+        style={{
+          height: stage.heroHeight,
+          marginHorizontal: stage.gutter,
+          borderRadius: stage.focusRing * 7,
+          backgroundColor: palette.surface,
+          opacity: 0.7,
         }}
-        renderItem={({ item, index }) => (
-          <Pressable
-            onPress={() => onOpen(item)}
-            onFocus={() => onFocusTile(index)}
-            onBlur={() => setFocusedIdx(null)}
-            style={[styles.tile, focusedIdx === index && styles.tileFocused]}
+      />
+      {[0, 1, 2].map((row) => (
+        <View key={row} style={{ marginTop: stage.rowGap }}>
+          <View
+            style={{
+              height: Math.round(stage.railTitleSize * 0.8),
+              width: stage.gutter * 6,
+              marginLeft: stage.gutter,
+              borderRadius: 4,
+              backgroundColor: palette.surfaceRaised,
+            }}
+          />
+          <View
+            style={{
+              flexDirection: "row",
+              gap: stage.cardGap,
+              paddingHorizontal: stage.gutter,
+              marginTop: stage.cardGap,
+            }}
           >
-            <Poster uri={item.posterUrl} style={styles.tilePoster} initials={initialsFor(item.name)} />
-            <Text style={styles.tileTitle} numberOfLines={1}>{item.name}</Text>
-            <Text style={styles.tileMeta}>
-              {[item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · ")}
-            </Text>
-          </Pressable>
-        )}
-      />
-    </View>
-  );
-}
-
-function ProgressRowView({ label, items, onOpen }: { label: string; items: ProgressRow[]; onOpen: (item: ProgressRow) => void }) {
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
-  const listRef = useRef<FlatList<ProgressRow> | null>(null);
-
-  const onFocusTile = (idx: number) => {
-    setFocusedIdx(idx);
-    if (idx >= 2) listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.25 });
-  };
-
-  return (
-    <View style={{ marginBottom: spacing.xl }}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <FlatList
-        ref={listRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.row}
-        data={items}
-        keyExtractor={(item) => `${item.subject_id}_${item.season_number ?? 0}_${item.episode_number ?? 0}`}
-        getItemLayout={(_, index) => ({ length: TILE_PITCH, offset: TILE_PITCH * index, index })}
-        windowSize={5}
-        initialNumToRender={8}
-        removeClippedSubviews
-        onScrollToIndexFailed={(info) => {
-          listRef.current?.scrollToOffset({ offset: Math.max(0, info.index * TILE_PITCH - 100), animated: true });
-        }}
-        renderItem={({ item, index }) => {
-          const pct = item.duration_seconds > 0 ? Math.round((item.position_seconds / item.duration_seconds) * 100) : null;
-          return (
-            <Pressable
-              onPress={() => onOpen(item)}
-              onFocus={() => onFocusTile(index)}
-              onBlur={() => setFocusedIdx(null)}
-              style={[styles.tile, focusedIdx === index && styles.tileFocused]}
-            >
-              <View style={styles.tilePosterWrap}>
-                <Poster uri={item.poster_url} style={styles.tilePoster} initials={initialsFor(item.title)} />
-                {pct !== null && pct > 0 ? <View style={[styles.tileBar, { width: `${Math.min(100, pct)}%` }]} /> : null}
-              </View>
-              <Text style={styles.tileTitle} numberOfLines={1}>{item.title}</Text>
-              <Text style={styles.tileMeta}>
-                {item.media_type === "series" ? `S${item.season_number ?? 1} E${item.episode_number ?? 1}` : "Movie"}
-              </Text>
-            </Pressable>
-          );
-        }}
-      />
-    </View>
-  );
-}
-
-function LibraryRow({ label, items, onOpen }: { label: string; items: LibraryTitle[]; onOpen: (item: LibraryTitle) => void }) {
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
-  const listRef = useRef<FlatList<LibraryTitle> | null>(null);
-
-  const onFocusTile = (idx: number) => {
-    setFocusedIdx(idx);
-    if (idx >= 2) listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.25 });
-  };
-
-  return (
-    <View style={{ marginBottom: spacing.xl }}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <FlatList
-        ref={listRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.row}
-        data={items}
-        keyExtractor={(item) => item.subject_id}
-        getItemLayout={(_, index) => ({ length: TILE_PITCH, offset: TILE_PITCH * index, index })}
-        windowSize={5}
-        initialNumToRender={8}
-        removeClippedSubviews
-        onScrollToIndexFailed={(info) => {
-          listRef.current?.scrollToOffset({ offset: Math.max(0, info.index * TILE_PITCH - 100), animated: true });
-        }}
-        renderItem={({ item, index }) => (
-          <Pressable
-            onPress={() => onOpen(item)}
-            onFocus={() => onFocusTile(index)}
-            onBlur={() => setFocusedIdx(null)}
-            style={[styles.tile, focusedIdx === index && styles.tileFocused]}
-          >
-            <Poster uri={item.poster_url} style={styles.tilePoster} initials={initialsFor(item.title)} />
-            <Text style={styles.tileTitle} numberOfLines={1}>{item.title}</Text>
-            <Text style={styles.tileMeta}>{item.media_type === "series" ? "Series" : "Movie"}</Text>
-          </Pressable>
-        )}
-      />
+            {[0, 1, 2, 3, 4].map((card) => (
+              <View
+                key={card}
+                style={{
+                  width: stage.posterWidth,
+                  height: stage.posterHeight,
+                  borderRadius: stage.focusRing * 5,
+                  backgroundColor: palette.surface,
+                }}
+              />
+            ))}
+          </View>
+        </View>
+      ))}
+      <Text style={{ color: palette.textMuted, fontSize: stage.metaSize, marginLeft: stage.gutter, marginTop: stage.rowGap }}>
+        Laying the stage…
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
-  bodyRow: { flex: 1, flexDirection: "row" },
-  sideRail: {
-    width: 220,
-    paddingTop: spacing.xxl,
-    paddingHorizontal: spacing.xl,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: palette.glassStroke,
-  },
-  brand: { ...typeScale.display, color: palette.accent, letterSpacing: 4, fontSize: 24 },
-  tagline: { ...typeScale.caption, color: palette.textMuted, marginTop: 2, marginBottom: spacing.xxl },
-  railNav: { gap: spacing.md },
-  railBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    borderWidth: 2,
-    borderColor: "transparent",
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  railBtnActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.14)" },
-  railBtnLabel: { color: palette.textPrimary, fontSize: 15, fontWeight: "700" },
-  railBtnLabelActive: { color: "#160B08" },
-  content: { flex: 1 },
-  pillBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.glassStroke,
-    backgroundColor: palette.glassFill,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  pillBtnText: { color: palette.textPrimary, fontSize: 14, fontWeight: "700" },
-  hero: {
-    marginHorizontal: spacing.xxl,
-    marginBottom: spacing.xl,
-    borderRadius: radius.card,
-    overflow: "hidden",
-    backgroundColor: palette.surfaceRaised,
-    height: 300,
-  },
-  heroScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(8,10,13,0.55)" },
-  heroContent: { position: "absolute", left: spacing.xxl, bottom: spacing.xl, right: spacing.xxl, gap: spacing.xs },
-  heroBadge: { color: palette.accent, fontSize: 11, fontWeight: "800", letterSpacing: 2 },
-  heroTitle: { ...typeScale.display, color: palette.textPrimary, fontSize: 34, lineHeight: 40 },
-  heroMeta: { color: palette.textSecondary, fontSize: 13 },
-  heroPlay: {
-    alignSelf: "flex-start",
-    backgroundColor: palette.accent,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  heroPlayText: { color: "#160B08", fontWeight: "800", fontSize: 14 },
-  rowLabel: { ...typeScale.micro, color: palette.textSecondary, paddingHorizontal: spacing.xxl, marginBottom: spacing.md },
-  row: { paddingHorizontal: spacing.xxl, gap: spacing.lg },
-  tile: { width: TILE_WIDTH, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface },
-  tileFocused: { transform: [{ scale: 1.07 }], borderColor: palette.accent, borderWidth: 2, backgroundColor: palette.surfaceRaised },
-  tilePosterWrap: { overflow: "hidden" },
-  tilePoster: { width: TILE_WIDTH, height: 96, backgroundColor: palette.surfaceRaised },
-  tileBar: { position: "absolute", bottom: 0, left: 0, height: 3, backgroundColor: palette.accent },
-  tileTitle: { color: palette.textPrimary, fontSize: 13, fontWeight: "600", paddingHorizontal: spacing.xs, paddingTop: spacing.xs },
-  tileMeta: { color: palette.textMuted, fontSize: 10, paddingHorizontal: spacing.xs, paddingBottom: spacing.xs },
-  errorBox: { alignItems: "center", paddingVertical: spacing.xxl },
-  errorTitle: { color: palette.danger, textAlign: "center" },
+  body: { flex: 1, flexDirection: "row" },
+  wall: { flex: 1 },
 });

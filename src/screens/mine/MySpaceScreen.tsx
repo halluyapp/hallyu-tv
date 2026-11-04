@@ -4,6 +4,9 @@ import { Poster, initialsFor } from "@/components/ui/Poster";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { useLibrary } from "@/state/LibraryContext";
+import { useDisplayMode } from "@/state/DisplayModeContext";
+import { useStage } from "@/hooks/useStage";
+import type { DisplayMode } from "@/design-system/stage";
 import { useSound } from "@/services/sound/SoundContext";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
@@ -14,6 +17,12 @@ import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-nat
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+const DISPLAY_OPTIONS: { key: DisplayMode; label: string; hint: string }[] = [
+  { key: "auto", label: "Auto", hint: "Detect this screen" },
+  { key: "tv", label: "TV", hint: "10-foot stage" },
+  { key: "tablet", label: "Tablet", hint: "Mid-size layout" },
+];
 
 export function MySpaceScreen() {
   const { watchlist, progress } = useLibrary();
@@ -28,6 +37,8 @@ export function MySpaceScreen() {
   } = useSound();
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
+  const { mode, setMode } = useDisplayMode();
+  const stage = useStage();
 
   const resumeList = progress.filter((p) => !p.completed && p.position_seconds > 5);
 
@@ -88,6 +99,43 @@ export function MySpaceScreen() {
           ))}
         </View>
       )}
+
+      <SectionHeading label="Display" />
+      <View style={styles.deviceRow}>
+        <MonitorSmartphone size={20} color={palette.accentBright} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.deviceTitle}>Screen layout</Text>
+          <Text style={styles.deviceMeta}>
+            {stage.remote
+              ? "10-foot television stage · remote-sized targets"
+              : stage.tier === "regular"
+                ? "Tablet and monitor layout"
+                : "Phone layout"}
+            {` · ${stage.width}×${stage.height}`}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.segment}>
+        {DISPLAY_OPTIONS.map((option) => {
+          const active = mode === option.key;
+          return (
+            <Pressable
+              key={option.key}
+              onPress={() => {
+                setMode(option.key);
+                play("tap");
+              }}
+              style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`Display mode: ${option.label}. ${option.hint}`}
+            >
+              <Text style={[styles.segmentLabel, active && styles.segmentLabelActive]}>{option.label}</Text>
+              <Text style={[styles.segmentHint, active && styles.segmentHintActive]}>{option.hint}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       <SectionHeading label="Preferences" />
       <View style={styles.deviceRow}>
@@ -225,4 +273,21 @@ const styles = StyleSheet.create({
   },
   deviceTitle: { ...typeScale.headline, color: palette.textPrimary },
   deviceMeta: { color: palette.textMuted, fontSize: 12, lineHeight: 17 },
+  segment: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.xl, marginTop: spacing.md },
+  segmentBtn: {
+    flex: 1,
+    backgroundColor: palette.glassFill,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    alignItems: "center",
+    gap: 2,
+  },
+  segmentBtnActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.14)" },
+  segmentLabel: { color: palette.textSecondary, fontSize: 13, fontWeight: "700" },
+  segmentLabelActive: { color: palette.textPrimary },
+  segmentHint: { color: palette.textMuted, fontSize: 10 },
+  segmentHintActive: { color: palette.accentBright },
 });

@@ -1,4 +1,5 @@
 import { palette, radius, spacing } from "@/design-system/tokens";
+import { useStage } from "@/hooks/useStage";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { searchCatalogue } from "@/services/provider/adapter";
 import { CatalogueItem } from "@/types/provider";
@@ -20,6 +21,13 @@ export function TvSearchScreen() {
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
   const inputRef = useRef<TextInput>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stage = useStage();
+  const columns = stage.tier === "stage" ? 5 : 3;
+  const cardWidth =
+    stage.tier === "stage"
+      ? stage.posterWidth
+      : Math.round((stage.width - stage.gutter * 2 - stage.cardGap * 2) / 3);
+  const posterHeight = Math.round(cardWidth * 1.4);
 
   const run = useCallback(async (q: string) => {
     if (q.trim().length < 2) {
@@ -48,10 +56,19 @@ export function TvSearchScreen() {
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn} hasTVPreferredFocus={results === null}>
+        <Pressable
+          onPress={() => navigation.goBack()}
+          style={[
+            styles.backBtn,
+            { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 },
+          ]}
+          hasTVPreferredFocus={results === null}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <ChevronLeft size={22} color={palette.textPrimary} />
         </Pressable>
-        <View style={styles.inputWrap}>
+        <View style={[styles.inputWrap, { height: stage.controlSize, paddingHorizontal: stage.cardGap }]}>
           <Search size={16} color={palette.textMuted} />
           <TextInput
             ref={inputRef}
@@ -59,7 +76,7 @@ export function TvSearchScreen() {
             onChangeText={setQuery}
             placeholder="Search titles…"
             placeholderTextColor={palette.textMuted}
-            style={styles.input}
+            style={[styles.input, { fontSize: stage.bodySize }]}
             returnKeyType="search"
             onSubmitEditing={() => void run(query)}
             autoFocus
@@ -74,25 +91,30 @@ export function TvSearchScreen() {
           <Text style={styles.empty}>Nothing matched “{query}”.</Text>
         ) : (
           <FlatList
+            key={`grid-${columns}`}
             data={results}
-            numColumns={4}
+            numColumns={columns}
             keyExtractor={(item) => `${item.subjectId}_${item.slug}`}
-            contentContainerStyle={styles.grid}
+            contentContainerStyle={[styles.grid, { paddingHorizontal: stage.gutter, gap: stage.cardGap }]}
             showsVerticalScrollIndicator={false}
-            windowSize={5}
-            initialNumToRender={12}
-            maxToRenderPerBatch={12}
-            removeClippedSubviews
+            windowSize={7}
+            initialNumToRender={columns * 3}
             renderItem={({ item, index }) => (
               <Pressable
                 onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
                 onFocus={() => setFocusedIdx(index)}
                 onBlur={() => setFocusedIdx(null)}
-                style={[styles.card, focusedIdx === index && styles.cardFocused]}
+                style={[styles.card, { width: cardWidth }, focusedIdx === index && styles.cardFocused]}
               >
-                <Poster uri={item.posterUrl} style={styles.poster} initials={initialsFor(item.name)} />
-                <Text style={styles.cardTitle} numberOfLines={2}>{item.name}</Text>
-                <Text style={styles.cardMeta}>
+                <Poster
+                  uri={item.posterUrl}
+                  style={[styles.poster, { width: cardWidth, height: posterHeight }]}
+                  initials={initialsFor(item.name)}
+                />
+                <Text style={[styles.cardTitle, { fontSize: stage.cardTitleSize }]} numberOfLines={2}>
+                  {item.name}
+                </Text>
+                <Text style={[styles.cardMeta, { fontSize: stage.metaSize }]}>
                   {[item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · ")}
                 </Text>
               </Pressable>
@@ -133,11 +155,18 @@ const styles = StyleSheet.create({
   },
   input: { flex: 1, color: palette.textPrimary, fontSize: 16, paddingVertical: 0 },
   grid: { gap: spacing.lg, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
-  card: { width: 190, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface },
-  cardFocused: { transform: [{ scale: 1.05 }], borderColor: palette.accent, borderWidth: 2 },
-  poster: { width: 190, height: 107, backgroundColor: palette.surfaceRaised },
-  cardTitle: { color: palette.textPrimary, fontSize: 13, fontWeight: "600", padding: spacing.sm, paddingBottom: 0 },
-  cardMeta: { color: palette.textMuted, fontSize: 10, padding: spacing.sm, paddingTop: 2 },
+  card: { borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface },
+  cardFocused: {
+    transform: [{ scale: 1.05 }],
+    shadowColor: palette.accent,
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 10,
+  },
+  poster: { backgroundColor: palette.surfaceRaised },
+  cardTitle: { color: palette.textPrimary, fontWeight: "600", padding: spacing.sm, paddingBottom: 0 },
+  cardMeta: { color: palette.textMuted, padding: spacing.sm, paddingTop: 2 },
   empty: { color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xl },
   hint: { color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xl },
 });

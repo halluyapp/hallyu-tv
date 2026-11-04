@@ -4,9 +4,10 @@ import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
 import { fetchHome, searchCatalogue } from "@/services/provider/adapter";
 import { useNavigation } from "@react-navigation/native";
+import { useStage } from "@/hooks/useStage";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search as SearchIcon } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -33,8 +34,13 @@ export function DiscoverScreen() {
   const [searching, setSearching] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, loadingMore: false });
   const navigation = useNavigation<Nav>();
-  const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const stage = useStage();
+  const columns = stage.tier === "compact" ? 3 : stage.tier === "regular" ? 4 : 5;
+  const cardWidth =
+    stage.tier === "stage"
+      ? stage.posterWidth
+      : Math.round((stage.width - stage.gutter * 2 - stage.cardGap * (columns - 1)) / columns);
 
   useEffect(() => {
     fetchHome()
@@ -107,12 +113,17 @@ export function DiscoverScreen() {
   }, [sections]);
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top + spacing.md }]}>
-      <Text style={styles.title}>Explore</Text>
-      <View style={styles.searchWrap}>
+    <View style={[styles.root, { paddingTop: insets.top + stage.cardGap }]}>
+      <Text style={[styles.title, { fontSize: stage.titleSize, paddingHorizontal: stage.gutter }]}>Explore</Text>
+      <View
+        style={[
+          styles.searchWrap,
+          { height: stage.controlSize, marginHorizontal: stage.gutter, paddingHorizontal: stage.cardGap },
+        ]}
+      >
         <SearchIcon size={18} color={palette.textMuted} />
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, { fontSize: stage.bodySize }]}
           placeholder="Search films and series"
           placeholderTextColor={palette.textMuted}
           value={query}
@@ -128,14 +139,19 @@ export function DiscoverScreen() {
           <EmptyState title="No matches" message={`Nothing found for “${query}”. Try a different search.`} />
         ) : (
           <FlatList
+            key={`results-${columns}`}
             data={results}
-            numColumns={3}
+            numColumns={columns}
             keyExtractor={(i) => i.subjectId}
             onEndReached={() => void loadMore()}
             onEndReachedThreshold={0.6}
-            contentContainerStyle={{ paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }}
+            contentContainerStyle={{ paddingHorizontal: stage.gutter, paddingBottom: stage.gutter * 2 }}
             renderItem={({ item }) => (
-              <PosterCard item={item} width={(width - spacing.xl * 2 - spacing.md * 2) / 3} onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })} />
+              <PosterCard
+                item={item}
+                width={cardWidth}
+                onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
+              />
             )}
           />
         )
@@ -148,7 +164,7 @@ export function DiscoverScreen() {
           data={categories}
           numColumns={3}
           keyExtractor={(c) => c}
-          contentContainerStyle={{ paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }}
+          contentContainerStyle={{ paddingHorizontal: stage.gutter, paddingBottom: stage.gutter * 2 }}
           ListHeaderComponent={
             <View style={styles.moodBlock}>
               <Text style={styles.moodHeading}>Follow a feeling</Text>

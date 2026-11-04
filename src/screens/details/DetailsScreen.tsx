@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/States";
 import { Poster, initialsFor } from "@/components/ui/Poster";
 import { SkeletonFill } from "@/components/ui/PosterCard";
+import { useStage } from "@/hooks/useStage";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
@@ -15,7 +16,7 @@ import { ProviderError, SeasonInfo, TitleDetail } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight, Volume2, VolumeX } from "lucide-react-native";
 
@@ -37,6 +38,8 @@ export function DetailsScreen() {
   const { inWatchlist, toggleWatchlist, resumeFor, latestFor, loading: libraryLoading } = useLibrary();
   const { play: playTone } = useSound();
   const insets = useSafeAreaInsets();
+  const stage = useStage();
+  const scrollY = useRef(new Animated.Value(0)).current;
 
   const [detail, setDetail] = useState<TitleDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -205,11 +208,40 @@ export function DetailsScreen() {
   const episodes = season ? Array.from({ length: season.maxEp }, (_, i) => i + 1) : [];
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xxl }}>
-      <View style={styles.heroWrap}>
-        {detail.backdropUrl ?? detail.posterUrl ? (
-          <Poster uri={detail.backdropUrl ?? detail.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(detail.title)} />
-        ) : null}
+    <Animated.ScrollView
+      style={styles.root}
+      contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xxl }}
+      onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+      scrollEventThrottle={16}
+    >
+      <View style={[styles.heroWrap, { height: stage.heroHeight }]}>
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              transform: [
+                {
+                  scale: scrollY.interpolate({
+                    inputRange: [-120, 0, stage.heroHeight],
+                    outputRange: [1.24, 1.06, 1],
+                    extrapolate: "clamp",
+                  }),
+                },
+                {
+                  translateY: scrollY.interpolate({
+                    inputRange: [0, stage.heroHeight],
+                    outputRange: [0, stage.heroHeight * 0.32],
+                    extrapolate: "clamp",
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          {detail.backdropUrl ?? detail.posterUrl ? (
+            <Poster uri={detail.backdropUrl ?? detail.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(detail.title)} />
+          ) : null}
+        </Animated.View>
         <LinearGradient
           colors={["rgba(8,10,13,0.28)", "rgba(8,10,13,0.62)", "rgba(8,10,13,1)"]}
           locations={[0, 0.55, 1]}
@@ -220,9 +252,9 @@ export function DetailsScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.body}>
-        <Text style={styles.title}>{detail.title}</Text>
-        <Text style={styles.meta}>
+      <View style={[styles.body, { paddingHorizontal: stage.gutter, paddingTop: stage.cardGap }]}>
+        <Text style={[styles.title, { fontSize: stage.titleSize }]}>{detail.title}</Text>
+        <Text style={[styles.meta, { fontSize: stage.metaSize }]}>
           {[
             detail.releaseDate?.slice(0, 4),
             detail.mediaType === "series" ? "Series" : "Movie",
@@ -239,10 +271,17 @@ export function DetailsScreen() {
             onPress={() => void play({ resumeAt: resume && !resume.completed ? resume.position_seconds : 0 })}
             style={{ flex: 1 }}
           />
-          <Pressable style={styles.iconAction} onPress={onWatchlist}>
+          <Pressable
+            style={[styles.iconAction, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
+            onPress={onWatchlist}
+          >
             {saved ? <BookmarkCheck size={20} color={palette.accent} /> : <Bookmark size={20} color={palette.textSecondary} />}
           </Pressable>
-          <Pressable style={styles.iconAction} onPress={() => void startDownload({})} disabled={resolving}>
+          <Pressable
+            style={[styles.iconAction, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
+            onPress={() => void startDownload({})}
+            disabled={resolving}
+          >
             <Download size={20} color={palette.textSecondary} />
           </Pressable>
         </View>
@@ -273,7 +312,7 @@ export function DetailsScreen() {
 
         {detail.mediaType === "series" && detail.seasons.length > 0 ? (
           <View style={{ marginTop: spacing.xl }}>
-            <Text style={styles.sectionTitle}>Episodes</Text>
+            <Text style={[styles.sectionTitle, { fontSize: stage.railTitleSize }]}>Episodes</Text>
             {detail.seasons.length > 1 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.md }}>
                 {detail.seasons.map((s) => (
@@ -299,7 +338,7 @@ export function DetailsScreen() {
                 return (
                   <Pressable
                     key={ep}
-                    style={[styles.episodeRow, episode === ep && styles.episodeRowActive]}
+                    style={[styles.episodeRow, { padding: stage.cardGap }, episode === ep && styles.episodeRowActive]}
                     onPress={() => {
                       setEpisode(ep);
                       void play({ resumeAt: p && !p.completed ? p.position_seconds : 0, season: season?.season ?? null, episode: ep });
@@ -324,11 +363,15 @@ export function DetailsScreen() {
 
         {detail.cast.length > 0 ? (
           <View style={{ marginTop: spacing.xl }}>
-            <Text style={styles.sectionTitle}>Cast</Text>
+            <Text style={[styles.sectionTitle, { fontSize: stage.railTitleSize }]}>Cast</Text>
             <View style={styles.castRow}>
               {detail.cast.slice(0, 6).map((s) => (
                 <View key={s.name} style={styles.castItem}>
-                  <Poster uri={s.avatarUrl} style={styles.castAvatar} initials={initialsFor(s.name)} />
+                  <Poster
+                    uri={s.avatarUrl}
+                    style={[styles.castAvatar, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
+                    initials={initialsFor(s.name)}
+                  />
                   <Text numberOfLines={1} style={styles.castName}>{s.name}</Text>
                   {s.character ? <Text numberOfLines={1} style={styles.castRole}>{s.character}</Text> : null}
                 </View>
@@ -342,7 +385,7 @@ export function DetailsScreen() {
           <Text style={styles.deviceHintText}>Progress, watchlist and downloads are stored on this device.</Text>
         </View>
       </View>
-    </ScrollView>
+    </Animated.ScrollView>
   );
 }
 
