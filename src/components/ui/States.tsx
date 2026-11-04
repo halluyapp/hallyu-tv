@@ -1,7 +1,7 @@
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import React from "react";
 import { StyleSheet, Text, View, ViewStyle, StyleProp } from "react-native";
-import { WifiOff, CloudOff, RefreshCw } from "lucide-react-native";
+import { CloudOff, RefreshCw } from "lucide-react-native";
 import { Button } from "./Button";
 
 /** Skeleton shimmer block for catalogue loading. */
@@ -31,15 +31,6 @@ export function EmptyState({ title, message }: { title: string; message: string 
   );
 }
 
-export function OfflineBanner() {
-  return (
-    <View style={styles.offline}>
-      <WifiOff size={14} color={palette.warning} />
-      <Text style={styles.offlineText}>You're offline — browsing cached content</Text>
-    </View>
-  );
-}
-
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <View style={styles.center}>
@@ -62,18 +53,5 @@ const styles = StyleSheet.create({
   },
   title: { color: palette.textPrimary, textAlign: "center" },
   message: { color: palette.textSecondary, textAlign: "center", lineHeight: 19 },
-  offline: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    backgroundColor: "rgba(229,179,94,0.12)",
-    borderColor: "rgba(229,179,94,0.3)",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.sm,
-    marginHorizontal: spacing.xl,
-    marginTop: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  offlineText: { color: palette.warning, fontSize: 12, fontWeight: "600" },
+
 });

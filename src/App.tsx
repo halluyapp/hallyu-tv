@@ -1,8 +1,6 @@
 import { palette } from "@/design-system/tokens";
 import { RootNavigator } from "@/navigation/RootNavigator";
-import { GateProvider } from "@/components/auth/GateProvider";
 import { LibraryProvider } from "@/state/LibraryContext";
-import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { hasCompletedOnboarding } from "@/utils/onboarding";
 import { DarkTheme, NavigationContainer } from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
@@ -23,10 +21,7 @@ const theme = {
   },
 };
 
-/**
- * Last-resort crash screen. A failed render used to surface as the raw red
- * error screen; users now see a branded, honest recovery screen instead.
- */
+/** Last-resort branded crash screen with a retry action. */
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
 
@@ -44,10 +39,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
         <View style={styles.errorRoot}>
           <Text style={styles.errorTitle}>Hallyu TV hit a problem</Text>
           <Text style={styles.errorMessage}>{this.state.error.message}</Text>
-          <Text
-            style={styles.errorRetry}
-            onPress={() => this.setState({ error: null })}
-          >
+          <Text style={styles.errorRetry} onPress={() => this.setState({ error: null })}>
             Tap to restart the app
           </Text>
         </View>
@@ -76,9 +68,9 @@ export default function App() {
         <View style={styles.root}>
           <StatusBar style="light" />
           <NavigationContainer theme={theme}>
-            <AuthProvider>
-              <AppShell showOnboarding={showOnboarding} />
-            </AuthProvider>
+            <LibraryProvider>
+              <RootNavigator showOnboarding={showOnboarding} />
+            </LibraryProvider>
           </NavigationContainer>
         </View>
       </SafeAreaProvider>
@@ -86,31 +78,8 @@ export default function App() {
   );
 }
 
-/**
- * Lives INSIDE AuthProvider — consuming auth context above the provider was
- * the launch crash ("useAuth must be used within AuthProvider").
- */
-function AppShell({ showOnboarding }: { showOnboarding: boolean }) {
-  const { isLoading } = useAuth();
-
-  if (isLoading) {
-    return <EmberSplash />;
-  }
-
-  return (
-    <GateProvider>
-      <LibraryProvider>
-        <RootNavigator showOnboarding={showOnboarding} />
-      </LibraryProvider>
-    </GateProvider>
-  );
-}
-
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: palette.background,
-  },
+  root: { flex: 1, backgroundColor: palette.background },
   errorRoot: {
     flex: 1,
     backgroundColor: palette.background,

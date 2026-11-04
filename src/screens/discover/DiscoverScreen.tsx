@@ -5,7 +5,7 @@ import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
 import { fetchHome, searchCatalogue } from "@/services/provider/adapter";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search as SearchIcon } from "lucide-react-native";
@@ -13,10 +13,7 @@ import { RootStackParamList } from "@/navigation/RootNavigator";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/**
- * Discover: genre/category browsing plus the search entry point (guests may
- * browse and search freely — only consumption actions are gated).
- */
+/** Discover: genre/category browsing plus the search entry point. */
 export function DiscoverScreen() {
   const [sections, setSections] = useState<HomeSection[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,19 +60,22 @@ export function DiscoverScreen() {
     };
   }, [query]);
 
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const loadMore = useCallback(async () => {
     const q = query.trim();
     if (!results || pagination.loadingMore || pagination.page >= pagination.totalPages) return;
     setPagination((p) => ({ ...p, loadingMore: true }));
     try {
       const next = await searchCatalogue(q, pagination.page + 1);
+      if (queryRef.current.trim() !== q) return;
       setResults((prev) => {
         const seen = new Set((prev ?? []).map((i) => i.subjectId));
         return [...(prev ?? []), ...next.items.filter((i) => !seen.has(i.subjectId))];
       });
       setPagination((p) => ({ ...p, page: next.page, totalPages: next.totalPages, loadingMore: false }));
     } catch {
-      setPagination((p) => ({ ...p, loadingMore: false }));
+      if (queryRef.current.trim() === q) setPagination((p) => ({ ...p, loadingMore: false }));
     }
   }, [query, results, pagination]);
 

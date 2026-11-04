@@ -1,11 +1,9 @@
 import { PosterCard } from "@/components/ui/PosterCard";
 import { EmptyState, ErrorState, SkeletonRail } from "@/components/ui/States";
-import { useGate } from "@/components/auth/GateProvider";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
 import { fetchHome } from "@/services/provider/adapter";
 import { useLibrary, ProgressRow } from "@/state/LibraryContext";
-import { useAuth } from "@/hooks/useAuth";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
@@ -97,9 +95,7 @@ export function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation<Nav>();
-  const { showGate } = useGate();
-  const { user } = useAuth();
-  const { resumeFor } = useLibrary();
+  const { latestFor } = useLibrary();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -136,7 +132,8 @@ export function HomeScreen() {
     [navigation],
   );
 
-  const heroResume = heroItem ? resumeFor(heroItem.subjectId, heroItem.mediaType === "series" ? 1 : null, heroItem.mediaType === "series" ? 1 : null) : null;
+  const heroProgress = heroItem ? latestFor(heroItem.subjectId) : null;
+  const heroResume = heroProgress && !heroProgress.completed && heroProgress.position_seconds > 5 ? heroProgress : null;
 
   return (
     <View style={[styles.root, { paddingTop: insets.top + spacing.md }]}>
@@ -169,7 +166,7 @@ export function HomeScreen() {
             heroItem ? (
               <View style={{ marginBottom: spacing.sm }}>
                 <Hero item={heroItem} onPress={() => openDetails(heroItem)} resume={heroResume} />
-                {user ? <ContinueWatchingRail onOpen={(p) => navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id })} /> : null}
+                <ContinueWatchingRail onOpen={(p) => navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id })} />
               </View>
             ) : null
           }

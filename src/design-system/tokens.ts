@@ -52,13 +52,5 @@ export const typeScale = {
   micro: { fontSize: 11, fontWeight: "600" as const, letterSpacing: 0.6, textTransform: "uppercase" as const },
 } as const;
 
-/** Motion timing system (ms). Micro-interactions, standard, hero. */
-export const motion = {
-  micro: 150,
-  standard: 260,
-  hero: 380,
-  easing: "cubic-bezier(0.32, 0.72, 0, 1)",
-} as const;
-
 export const posterRatio = { width: 2, height: 3 } as const;
 export const isTv = Platform.isTV;

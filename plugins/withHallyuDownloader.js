@@ -26,10 +26,9 @@ const path = require("path");
 
 /** Mirror of PROVIDER_MEDIA_HEADERS (src/services/provider/client.ts). */
 const MEDIA_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
-  Referer: "https://www.moviebox.ph/",
-  Origin: "https://www.moviebox.ph",
+  "User-Agent": "Mozilla/5.0",
+  Referer: "https://moviebox.ph/",
+  Origin: "https://moviebox.ph",
 };
 
 const PACKAGE = "app.hallyutv.dev";
@@ -140,7 +139,9 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
                 out.putDouble("bytes", soFar.toDouble())
                 out.putDouble("total", total.toDouble())
                 out.putDouble("reason", reason.toDouble())
-                out.putString("localPath", targetFile(key).absolutePath)
+                val file = targetFile(key)
+                out.putString("localPath", file.absolutePath)
+                out.putDouble("fileSize", if (file.exists()) file.length().toDouble() else -1.0)
             }
             promise.resolve(out)
         } catch (e: Exception) {

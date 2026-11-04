@@ -1,7 +1,6 @@
 /**
- * Minimal SRT parser for the subtitle overlay. Preserves timing; used because
- * side-loaded SRT tracks cannot be attached to a progressive MP4 natively —
- * they are rendered as a styled overlay synced to the player clock.
+ * Side-loaded subtitle parsing for the native player overlay. Supports SRT
+ * and WebVTT text tracks; cues are sorted and looked up by binary search.
  */
 
 export interface Cue {
@@ -10,56 +9,91 @@ export interface Cue {
   text: string;
 }
 
-function timeToMs(t: string): number {
-  // "00:12:34,567" — the fraction may be 1-3 digits (",5" = 500ms, ",56" = 560ms).
-  const m = t.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
-  if (!m) return 0;
+function timeToMs(t: string): number | null {
+  const m = t.trim().match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})$/);
+  if (!m) return null;
   const h = Number(m[1] ?? 0);
   const min = Number(m[2] ?? 0);
   const s = Number(m[3] ?? 0);
   const ms = Number((m[4] ?? "0").padEnd(3, "0"));
+  if (min > 59 || s > 59) return null;
   return h * 3600_000 + min * 60_000 + s * 1000 + ms;
 }
 
-export function parseSrt(content: string): Cue[] {
+function cleanText(lines: string[]): string {
+  return lines
+    .join("\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+}
+
+function parseBlocks(content: string): Cue[] {
   const cues: Cue[] = [];
-  const blocks = content.replace(/\r\n/g, "\n").split(/\n\n+/);
+  const blocks = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split(/\n\n+/);
   for (const block of blocks) {
     const lines = block.split("\n").filter((l) => l.trim().length > 0);
     if (lines.length < 2) continue;
-    const timingLine = lines.find((l) => l.includes("-->"));
-    if (!timingLine) continue;
-    const [startRaw, endRaw] = timingLine.split("-->");
+    const timingIndex = lines.findIndex((l) => l.includes("-->"));
+    if (timingIndex < 0) continue;
+    const timingLine = lines[timingIndex]!;
+    const [startRaw, endRawWithSettings] = timingLine.split("-->");
+    const endRaw = endRawWithSettings?.trim().split(/\s+/)[0];
     if (!startRaw || !endRaw) continue;
-    const textLines = lines.filter((l) => l !== timingLine && !/^\d+$/.test(l.trim()));
-    const text = textLines.join("\n").replace(/<[^>]+>/g, "").trim();
+    const startMs = timeToMs(startRaw);
+    const endMs = timeToMs(endRaw);
+    if (startMs === null || endMs === null || endMs <= startMs) continue;
+    const text = cleanText(lines.slice(timingIndex + 1));
     if (!text) continue;
-    cues.push({ startMs: timeToMs(startRaw), endMs: timeToMs(endRaw), text });
+    cues.push({ startMs, endMs, text });
   }
-  return cues;
+  return cues.sort((a, b) => a.startMs - b.startMs);
 }
 
+export function parseSrt(content: string): Cue[] {
+  return parseBlocks(content);
+}
+
+export function parseVtt(content: string): Cue[] {
+  return parseBlocks(content.replace(/^WEBVTT[^\n]*\n/i, ""));
+}
+
+/** Auto-detect WebVTT vs SRT. */
+export function parseSubtitles(content: string): Cue[] {
+  return /^\uFEFF?WEBVTT/i.test(content.trimStart()) ? parseVtt(content) : parseSrt(content);
+}
+
+/**
+ * Active cue at playback time. `offsetMs` is a subtitle delay: positive values
+ * delay subtitles (show cues later), negative values advance them.
+ */
 export function cueAt(cues: Cue[], ms: number, offsetMs = 0): Cue | null {
-  const t = ms + offsetMs;
-  for (const c of cues) {
-    if (t >= c.startMs && t <= c.endMs) return c;
+  const t = ms - offsetMs;
+  let lo = 0;
+  let hi = cues.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const c = cues[mid]!;
+    if (t < c.startMs) hi = mid - 1;
+    else if (t > c.endMs) lo = mid + 1;
+    else return c;
   }
   return null;
 }
 
-/** Convert SRT cues to WebVTT (for native track support when the source supports it). */
 export function srtToVtt(srt: string): string {
+  const fmt = (ms: number) => {
+    const h = Math.floor(ms / 3600_000);
+    const m = Math.floor((ms % 3600_000) / 60_000);
+    const s = Math.floor((ms % 60_000) / 1000);
+    const r = ms % 1000;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(r).padStart(3, "0")}`;
+  };
   const cues = parseSrt(srt)
-    .map((c) => {
-      const fmt = (ms: number) => {
-        const h = Math.floor(ms / 3600_000);
-        const m = Math.floor((ms % 3600_000) / 60_000);
-        const s = Math.floor((ms % 60_000) / 1000);
-        const r = ms % 1000;
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(r).padStart(3, "0")}`;
-      };
-      return `${fmt(c.startMs)} --> ${fmt(c.endMs)}\n${c.text}`;
-    })
+    .map((c) => `${fmt(c.startMs)} --> ${fmt(c.endMs)}\n${c.text}`)
     .join("\n\n");
   return `WEBVTT\n\n${cues}`;
 }

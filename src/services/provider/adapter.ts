@@ -1,5 +1,5 @@
-import { providerFetch } from "./client";
-import { normalizeStreamResponse } from "./streams";
+import { providerFetch, PROVIDER_MEDIA_HEADERS } from "./client";
+import { normalizeStreamResponse, selectableSources, streamEndpoint } from "./streams";
 import {
   CaptionTrack,
   CatalogueItem,
@@ -13,25 +13,32 @@ import {
   parseCatalogueItem,
 } from "@/types/provider";
 
-/** Typed provider adapter. Every response is validated at runtime. */
+/** Typed adapter for the Zarhosting public API. Responses are validated at runtime. */
+
+function unwrap(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null) return {};
+  const r = raw as Record<string, unknown>;
+  if (typeof r.data === "object" && r.data !== null) return r.data as Record<string, unknown>;
+  return r;
+}
 
 export async function fetchHome(signal?: AbortSignal): Promise<HomeSection[]> {
   const raw = await providerFetch("/home", { signal });
-  if (typeof raw !== "object" || raw === null || !Array.isArray((raw as Record<string, unknown>).sections)) {
-    throw new ProviderError("invalid_response", "Unexpected home response.");
-  }
+  const data = unwrap(raw);
+  const rawSections = Array.isArray(data.sections) ? data.sections : Array.isArray((raw as Record<string, unknown>)?.sections) ? (raw as { sections: unknown[] }).sections : [];
   const sections: HomeSection[] = [];
-  for (const s of (raw as { sections: unknown[] }).sections) {
+  const seenLabels = new Set<string>();
+  for (const s of rawSections) {
     if (typeof s !== "object" || s === null) continue;
     const section = s as Record<string, unknown>;
-    if (!isNonEmptyString(section.section) || !Array.isArray(section.items)) continue;
+    const label = isNonEmptyString(section.section) ? section.section : isNonEmptyString(section.title) ? section.title : null;
+    if (!label || !Array.isArray(section.items) || seenLabels.has(label)) continue;
     const items = section.items.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
-    if (items.length === 0) continue;
-    // De-duplicate within a section; skip duplicated section labels later in the list.
     const seen = new Set<string>();
     const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
     if (unique.length === 0) continue;
-    sections.push({ section: section.section, items: unique });
+    seenLabels.add(label);
+    sections.push({ section: label, items: unique });
   }
   return sections;
 }
@@ -43,43 +50,36 @@ export interface SearchPage {
 }
 
 export async function searchCatalogue(query: string, page = 1, signal?: AbortSignal): Promise<SearchPage> {
-  const raw = await providerFetch(
-    `/search?q=${encodeURIComponent(query)}&page=${page}`,
-    { signal },
-  );
-  if (typeof raw !== "object" || raw === null) throw new ProviderError("invalid_response", "Unexpected search response.");
-  const r = raw as Record<string, unknown>;
-  const items = Array.isArray(r.items)
-    ? r.items.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null)
-    : [];
-  const totalPages = typeof r.total_pages === "number" ? r.total_pages : 1;
-  return { items, page, totalPages };
+  const raw = await providerFetch(`/search?q=${encodeURIComponent(query)}&page=${page}`, { signal });
+  const data = unwrap(raw);
+  const rawItems = Array.isArray(data.items) ? data.items : Array.isArray(data.results) ? data.results : [];
+  const items = rawItems.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
+  const seen = new Set<string>();
+  const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
+  const totalPages = typeof data.total_pages === "number" ? data.total_pages : typeof data.totalPages === "number" ? data.totalPages : 1;
+  return { items: unique, page, totalPages };
 }
 
 export async function fetchDetail(detailPath: string, signal?: AbortSignal): Promise<TitleDetail> {
   const raw = await providerFetch(`/detail/${encodeURIComponent(detailPath)}`, { signal });
-  if (typeof raw !== "object" || raw === null) throw new ProviderError("invalid_response", "Unexpected detail response.");
-  const data = (raw as Record<string, unknown>).data;
-  if (typeof data !== "object" || data === null) throw new ProviderError("not_found", "This title could not be found.");
-  const d = data as Record<string, unknown>;
-  const subject = d.subject as Record<string, any> | undefined;
-  if (!subject || !isNonEmptyString(subject.subjectId) || !isNonEmptyString(subject.title)) {
+  const data = unwrap(raw);
+  const subject = (typeof data.subject === "object" && data.subject !== null ? data.subject : data) as Record<string, any>;
+  if (!isNonEmptyString(subject.subjectId) || !isNonEmptyString(subject.title)) {
     throw new ProviderError("invalid_response", "Title data is incomplete.");
   }
 
-  const resource = (d.resource ?? {}) as Record<string, any>;
-  const seasons: SeasonInfo[] = Array.isArray(resource.seasons)
-    ? resource.seasons
-        .map((s: any) =>
-          typeof s?.se === "number" && typeof s?.maxEp === "number"
-            ? { season: s.se, maxEp: s.maxEp }
-            : null,
-        )
-        .filter((s): s is SeasonInfo => s !== null)
-    : [];
+  const resource = (typeof data.resource === "object" && data.resource !== null ? data.resource : {}) as Record<string, any>;
+  const rawSeasons = Array.isArray(resource.seasons) ? resource.seasons : Array.isArray(subject.seasons) ? subject.seasons : [];
+  const seasons: SeasonInfo[] = rawSeasons
+    .map((s: any) => {
+      const season = typeof s?.se === "number" ? s.se : typeof s?.season === "number" ? s.season : null;
+      const maxEp = typeof s?.maxEp === "number" ? s.maxEp : typeof s?.episodeCount === "number" ? s.episodeCount : null;
+      return season !== null && maxEp !== null && maxEp > 0 ? { season, maxEp } : null;
+    })
+    .filter((s): s is SeasonInfo => s !== null);
 
-  const cast: StarInfo[] = Array.isArray(d.stars)
-    ? d.stars
+  const cast: StarInfo[] = Array.isArray(data.stars)
+    ? data.stars
         .map((s: any) =>
           isNonEmptyString(s?.name)
             ? { name: s.name, character: isNonEmptyString(s.character) ? s.character : null, avatarUrl: isNonEmptyString(s.avatarUrl) ? s.avatarUrl : null }
@@ -112,42 +112,10 @@ export async function fetchDetail(detailPath: string, signal?: AbortSignal): Pro
   };
 }
 
-async function doResolveStreams(
-  subjectId: string,
-  detailPath: string,
-  se: number,
-  ep: number,
-  signal?: AbortSignal,
-): Promise<StreamResolution> {
-  const qs = `detail_path=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
-  const raw = await providerFetch(`/stream/${encodeURIComponent(subjectId)}?${qs}`, {
-    timeoutMs: 20_000,
-    signal,
-  });
-  // Shared normalization (same rules as scripts/verify-provider.mjs and the tests).
-  const n = normalizeStreamResponse(raw);
-  if (n.sources.length === 0) {
-    throw new ProviderError(
-      "no_stream",
-      n.note ?? (n.hasResource ? "No playable source was returned for this selection." : "No stream is available for this title right now."),
-    );
-  }
-  return {
-    subjectId: n.subjectId ?? subjectId,
-    se: n.se || se,
-    ep: n.ep || ep,
-    sources: n.sources,
-    hasResource: n.hasResource && n.sources.length > 0,
-    note: n.note,
-  };
-}
-
-// Identical in-flight resolves share one request (reference: moviebox.ts callKeyed).
-const inFlight = new Map<string, Promise<StreamResolution>>();
-
 /**
- * Resolve playback streams. Movies use se=0/ep=0; series pass real numbers.
- * `detail_path` is REQUIRED by the provider contract (verified 2026-11-03).
+ * Resolve playable sources through the required Zarhosting endpoint:
+ * GET /stream/{subject_id}?detail_path=&se=&ep=
+ * Movies use se=0&ep=0; series pass the selected season/episode.
  */
 export async function resolveStreams(
   subjectId: string,
@@ -156,12 +124,31 @@ export async function resolveStreams(
   ep = 0,
   signal?: AbortSignal,
 ): Promise<StreamResolution> {
-  const key = `${subjectId}|${se}|${ep}`;
-  const existing = inFlight.get(key);
-  if (existing) return existing;
-  const pending = doResolveStreams(subjectId, detailPath, se, ep, signal).finally(() => inFlight.delete(key));
-  inFlight.set(key, pending);
-  return pending;
+  if (!isNonEmptyString(subjectId) || !isNonEmptyString(detailPath)) {
+    throw new ProviderError("invalid_response", "A subject id and detail path are required to resolve streams.");
+  }
+  if (!Number.isInteger(se) || se < 0 || !Number.isInteger(ep) || ep < 0) {
+    throw new ProviderError("invalid_response", "Season and episode must be non-negative integers.");
+  }
+  const raw = await providerFetch(streamEndpoint(subjectId, detailPath, se, ep), {
+    timeoutMs: 20_000,
+    signal,
+  });
+  const n = normalizeStreamResponse(raw);
+  if (selectableSources(n.sources).length === 0) {
+    throw new ProviderError(
+      "no_stream",
+      n.note ?? (n.hasResource ? "No playable source was returned for this selection." : "No stream is available for this title right now."),
+    );
+  }
+  return {
+    subjectId: n.subjectId ?? subjectId,
+    se,
+    ep,
+    sources: n.sources,
+    hasResource: n.hasResource,
+    note: n.note,
+  };
 }
 
 export async function fetchCaptions(
@@ -173,15 +160,44 @@ export async function fetchCaptions(
 ): Promise<CaptionTrack[]> {
   const qs = `detail_path=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
   const raw = await providerFetch(`/stream/${encodeURIComponent(subjectId)}/captions?${qs}`, { signal });
-  if (typeof raw !== "object" || raw === null) return [];
-  const r = raw as Record<string, any>;
-  if (!Array.isArray(r.captions)) return [];
-  return r.captions
-    .filter((c: any): c is Record<string, any> => typeof c === "object" && c !== null && isNonEmptyString(c.url))
-    .map((c: any) => ({
-      id: isNonEmptyString(c.id) ? c.id : `${c.lan ?? "track"}`,
-      language: isNonEmptyString(c.lan) ? c.lan : "unknown",
-      languageName: isNonEmptyString(c.lanName) ? c.lanName : c.lan ?? "Unknown",
-      url: c.url,
-    }));
+  const data = unwrap(raw);
+  const list = Array.isArray(data.captions) ? data.captions : Array.isArray(data.subtitles) ? data.subtitles : [];
+  const tracks: CaptionTrack[] = [];
+  const seen = new Set<string>();
+  for (const c of list) {
+    if (typeof c !== "object" || c === null) continue;
+    const r = c as Record<string, unknown>;
+    const url = typeof r.url === "string" ? r.url : typeof r.subtitleUrl === "string" ? r.subtitleUrl : null;
+    if (!url || !/^https:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    const language = isNonEmptyString(r.lan) ? r.lan : isNonEmptyString(r.language) ? r.language : "unknown";
+    const languageName = isNonEmptyString(r.lanName) ? r.lanName : isNonEmptyString(r.languageName) ? r.languageName : language;
+    tracks.push({
+      id: isNonEmptyString(r.id) ? r.id : `${language}-${tracks.length}`,
+      language,
+      languageName,
+      url,
+    });
+  }
+  return tracks;
+}
+
+/** Fetch a caption file directly from the CDN with the media header profile. */
+export async function fetchCaptionText(url: string, signal?: AbortSignal): Promise<string> {
+  if (!/^https:\/\//i.test(url)) throw new ProviderError("invalid_response", "Invalid caption URL.");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort);
+  try {
+    const res = await fetch(url, { headers: { ...PROVIDER_MEDIA_HEADERS }, signal: controller.signal });
+    if (!res.ok) throw new ProviderError("unavailable", `Caption server responded with ${res.status}`);
+    return await res.text();
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
+    throw new ProviderError("network", "Caption track could not be loaded.");
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
