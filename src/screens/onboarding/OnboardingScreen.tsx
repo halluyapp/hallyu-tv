@@ -38,7 +38,6 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
 
   const go = (next: number) => {
     if (next >= STEPS.length) play("confirm");
-    else play("tap");
     Animated.timing(fade, { toValue: 0, duration: 140, useNativeDriver: true }).start(() => {
       if (next >= STEPS.length) {
         onDone();
@@ -67,7 +66,13 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
           ))}
         </View>
         <Button label={index === STEPS.length - 1 ? "Get started" : "Continue"} onPress={() => go(index + 1)} style={{ alignSelf: "stretch" }} />
-        <Pressable onPress={() => go(STEPS.length)} hitSlop={12}>
+        <Pressable
+          onPress={() => {
+            play("tap");
+            go(STEPS.length);
+          }}
+          hitSlop={12}
+        >
           <Text style={styles.skip}>Skip</Text>
         </Pressable>
       </View>
