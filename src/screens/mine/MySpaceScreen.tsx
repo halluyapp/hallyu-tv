@@ -6,7 +6,8 @@ import { useLibrary } from "@/state/LibraryContext";
 import { useSound } from "@/services/sound/SoundContext";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
-import { MonitorSmartphone, ShieldCheck, Volume2, VolumeX } from "lucide-react-native";
+import Slider from "@react-native-community/slider";
+import { MonitorSmartphone, ShieldCheck, Vibrate, Volume2, VolumeX } from "lucide-react-native";
 import React from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,7 +16,15 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function MySpaceScreen() {
   const { watchlist, progress } = useLibrary();
-  const { enabled: soundEnabled, setEnabled: setSoundEnabled, play } = useSound();
+  const {
+    enabled: soundEnabled,
+    setEnabled: setSoundEnabled,
+    volume,
+    setVolume,
+    hapticsEnabled,
+    setHapticsEnabled,
+    play,
+  } = useSound();
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
 
@@ -26,7 +35,7 @@ export function MySpaceScreen() {
       style={styles.root}
       contentContainerStyle={{ paddingTop: insets.top + spacing.md, paddingBottom: spacing.xxxl }}
     >
-      <Text style={styles.title}>My Space</Text>
+      <Text style={styles.title}>Profile</Text>
 
       <View style={styles.profileCard}>
         <View style={[styles.avatar, styles.avatarPlaceholder]}>
@@ -98,6 +107,40 @@ export function MySpaceScreen() {
             setSoundEnabled(v);
             if (v) play("confirm");
           }}
+          trackColor={{ false: palette.surfaceRaised, true: palette.accent }}
+          thumbColor="#F4F2ED"
+        />
+      </View>
+
+      {soundEnabled ? (
+        <View style={styles.deviceRow}>
+          <Volume2 size={20} color={palette.accentBright} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.deviceTitle}>Sound volume</Text>
+            <Text style={styles.deviceMeta}>Interface tones stay quieter than the titles you watch.</Text>
+          </View>
+          <Slider
+            style={{ width: 120, height: 40 }}
+            minimumValue={0}
+            maximumValue={1}
+            value={volume}
+            onSlidingComplete={setVolume}
+            minimumTrackTintColor={palette.accent}
+            maximumTrackTintColor={palette.surfaceRaised}
+            thumbTintColor="#F4F2ED"
+          />
+        </View>
+      ) : null}
+
+      <View style={styles.deviceRow}>
+        <Vibrate size={20} color={hapticsEnabled ? palette.accentBright : palette.textMuted} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.deviceTitle}>Haptics</Text>
+          <Text style={styles.deviceMeta}>A gentle buzz on meaningful actions. Off on TV, always.</Text>
+        </View>
+        <Switch
+          value={hapticsEnabled}
+          onValueChange={setHapticsEnabled}
           trackColor={{ false: palette.surfaceRaised, true: palette.accent }}
           thumbColor="#F4F2ED"
         />

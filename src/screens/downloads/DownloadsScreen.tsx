@@ -2,7 +2,7 @@ import { EmptyState } from "@/components/ui/States";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { downloadManager } from "@/services/downloads/manager";
-import { absolutePathFor } from "@/services/downloads/fs";
+import { absolutePathFor, LegacyFileSystem } from "@/services/downloads/fs";
 import { localFileUri } from "@/services/downloads/paths";
 import { DownloadJob } from "@/services/downloads/types";
 import { useLibrary } from "@/state/LibraryContext";
@@ -12,7 +12,8 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CheckCircle2, Pause, Play as PlayIcon, Trash2, AlertTriangle, ArrowDownToLine } from "lucide-react-native";
+import { CheckCircle2, Pause, Play as PlayIcon, Trash2, AlertTriangle, ArrowDownToLine, HardDrive } from "lucide-react-native";
+import { formatBytes } from "@/utils/format";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -39,7 +40,13 @@ export function DownloadsScreen() {
   const { play } = useSound();
   const insets = useSafeAreaInsets();
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
+  const [freeBytes, setFreeBytes] = useState<number | null>(null);
   const prevStates = useRef(new Map<string, string>());
+
+  // Real device capacity — measured from the platform, never invented.
+  useEffect(() => {
+    void LegacyFileSystem.freeDiskBytes().then(setFreeBytes);
+  }, []);
 
   useEffect(() => {
     void downloadManager.hydrate();
@@ -58,6 +65,8 @@ export function DownloadsScreen() {
       prevStates.current.set(job.id, job.state);
     }
   }, [jobs, play]);
+
+  const usedBytes = jobs.reduce((sum, j) => sum + (j.state === "completed" ? j.totalBytes ?? 0 : j.receivedBytes), 0);
 
   const confirmDelete = (job: DownloadJob) =>
     Alert.alert("Delete download?", `“${job.title}” will be removed from this device.`, [
@@ -155,6 +164,29 @@ export function DownloadsScreen() {
       <Text style={styles.subtitle}>
         Files live in this app's private storage on this device and play without a network.
       </Text>
+      {jobs.length > 0 ? (
+        <View style={styles.meter}>
+          <View style={styles.meterHead}>
+            <HardDrive size={15} color={palette.accentBright} />
+            <Text style={styles.meterTitle}>Offline vault</Text>
+            <Text style={styles.meterValue}>
+              {formatBytes(usedBytes)}
+              {freeBytes !== null ? ` · ${formatBytes(freeBytes)} free` : ""}
+            </Text>
+          </View>
+          <View style={styles.meterTrack}>
+            <View
+              style={[
+                styles.meterFill,
+                {
+                  width: freeBytes !== null && freeBytes > 0 ? `${Math.min(100, Math.max(1, (usedBytes / (usedBytes + freeBytes)) * 100))}%` : "6%",
+                  opacity: usedBytes > 0 ? 1 : 0.35,
+                },
+              ]}
+            />
+          </View>
+        </View>
+      ) : null}
       {jobs.length === 0 ? (
         <EmptyState
           title="No downloads yet"
@@ -180,6 +212,21 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
   title: { ...typeScale.title, color: palette.textPrimary, paddingHorizontal: spacing.xl },
   subtitle: { ...typeScale.caption, color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xs, marginBottom: spacing.lg, lineHeight: 19 },
+  meter: {
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.lg,
+    backgroundColor: palette.glassFill,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.card,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  meterHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  meterTitle: { ...typeScale.headline, color: palette.textPrimary, flex: 1 },
+  meterValue: { color: palette.textSecondary, fontSize: 12, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  meterTrack: { height: 8, borderRadius: 4, backgroundColor: palette.surfaceRaised, overflow: "hidden" },
+  meterFill: { height: 8, borderRadius: 4, backgroundColor: palette.accent },
   job: {
     flexDirection: "row",
     gap: spacing.md,

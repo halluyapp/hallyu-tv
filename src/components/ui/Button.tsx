@@ -1,5 +1,6 @@
 import { palette, radius, typeScale } from "@/design-system/tokens";
 import { useSound } from "@/services/sound/SoundContext";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import React, { useCallback, useRef } from "react";
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View, ViewStyle } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -25,21 +26,23 @@ const VARIANTS: Record<Variant, { bg: string; fg: string; border?: string }> = {
 
 export function Button({ label, onPress, variant = "primary", icon, loading, disabled, style }: ButtonProps) {
   const scale = useRef(new Animated.Value(1)).current;
-  const { play } = useSound();
+  const { play, hapticsEnabled } = useSound();
+  const reducedMotion = useReducedMotion();
   const v = VARIANTS[variant];
   const isDisabled = disabled || loading;
 
   const onPressIn = useCallback(() => {
-    Animated.spring(scale, { toValue: 0.965, useNativeDriver: true, speed: 40 }).start();
+    // Reduced motion: no scale travel; feedback stays visible via opacity/colour.
+    if (!reducedMotion) Animated.spring(scale, { toValue: 0.965, useNativeDriver: true, speed: 40 }).start();
     if (!isDisabled) {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (hapticsEnabled && !reducedMotion) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       play("tap");
     }
-  }, [scale, isDisabled, play]);
+  }, [scale, isDisabled, reducedMotion, hapticsEnabled, play]);
 
   const onPressOut = useCallback(() => {
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();
-  }, [scale]);
+    if (!reducedMotion) Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();
+  }, [scale, reducedMotion]);
 
   return (
     <Animated.View style={[{ transform: [{ scale }], opacity: isDisabled ? 0.55 : 1 }, style]}>

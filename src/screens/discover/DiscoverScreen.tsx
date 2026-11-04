@@ -14,6 +14,16 @@ import { RootStackParamList } from "@/navigation/RootNavigator";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
+/** Editorial moods, each mapped to a real catalogue genre search. */
+const MOODS: { label: string; query: string }[] = [
+  { label: "Mind-bending", query: "Sci-Fi" },
+  { label: "Feel-good", query: "Comedy" },
+  { label: "Late night", query: "Thriller" },
+  { label: "Family night", query: "Family" },
+  { label: "Adrenaline", query: "Action" },
+  { label: "Slow burn", query: "Drama" },
+];
+
 /** Discover: genre/category browsing plus the search entry point. */
 export function DiscoverScreen() {
   const [sections, setSections] = useState<HomeSection[] | null>(null);
@@ -98,7 +108,7 @@ export function DiscoverScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top + spacing.md }]}>
-      <Text style={styles.title}>Discover</Text>
+      <Text style={styles.title}>Explore</Text>
       <View style={styles.searchWrap}>
         <SearchIcon size={18} color={palette.textMuted} />
         <TextInput
@@ -139,6 +149,28 @@ export function DiscoverScreen() {
           numColumns={3}
           keyExtractor={(c) => c}
           contentContainerStyle={{ paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }}
+          ListHeaderComponent={
+            <View style={styles.moodBlock}>
+              <Text style={styles.moodHeading}>Follow a feeling</Text>
+              <FlatList
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: spacing.sm }}
+                data={MOODS}
+                keyExtractor={(m) => m.label}
+                renderItem={({ item }) => (
+                  <Pressable
+                    style={styles.moodChip}
+                    onPress={() => setQuery(item.query)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Browse ${item.label} titles`}
+                  >
+                    <Text style={styles.moodLabel}>{item.label}</Text>
+                  </Pressable>
+                )}
+              />
+            </View>
+          }
           renderItem={({ item }) => <CategoryTile label={item} onPress={() => setQuery(item)} />}
         />
       )}
@@ -195,6 +227,17 @@ const styles = StyleSheet.create({
     height: 44,
   },
   searchInput: { flex: 1, color: palette.textPrimary, fontSize: 15 },
+  moodBlock: { marginBottom: spacing.lg },
+  moodHeading: { ...typeScale.micro, color: palette.textSecondary, marginBottom: spacing.sm },
+  moodChip: {
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 8,
+  },
+  moodLabel: { color: palette.textPrimary, fontSize: 13, fontWeight: "700" },
   category: {
     flex: 1 / 3,
     flexGrow: 1,

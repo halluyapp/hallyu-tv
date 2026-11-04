@@ -1,5 +1,6 @@
 import { palette, radius } from "@/design-system/tokens";
 import { useSound, type SoundName } from "@/services/sound/SoundContext";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import React, { useCallback, useRef } from "react";
 import { Animated, Pressable, PressableProps, StyleProp, StyleSheet, View, ViewStyle } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -20,24 +21,26 @@ interface GlassPanelProps extends PressableProps {
 
 export function GlassPanel({ children, style, padding, pressedScale = 0.97, haptic = false, sound = false, ...rest }: GlassPanelProps) {
   const scale = useRef(new Animated.Value(1)).current;
-  const { play } = useSound();
+  const { play, hapticsEnabled } = useSound();
+  const reducedMotion = useReducedMotion();
 
   const onPressIn = useCallback(
     (e: any) => {
-      Animated.spring(scale, { toValue: pressedScale, useNativeDriver: true, speed: 40 }).start();
-      if (haptic) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      // Reduced motion: keep the pressable response, drop the movement.
+      if (!reducedMotion) Animated.spring(scale, { toValue: pressedScale, useNativeDriver: true, speed: 40 }).start();
+      if (haptic && hapticsEnabled) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       if (sound) play(sound);
       rest.onPressIn?.(e);
     },
-    [scale, pressedScale, haptic, sound, play, rest],
+    [scale, pressedScale, reducedMotion, haptic, hapticsEnabled, sound, play, rest],
   );
 
   const onPressOut = useCallback(
     (e: any) => {
-      Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();
+      if (!reducedMotion) Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();
       rest.onPressOut?.(e);
     },
-    [scale, rest],
+    [scale, reducedMotion, rest],
   );
 
   return (

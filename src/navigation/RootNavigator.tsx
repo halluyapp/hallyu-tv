@@ -1,4 +1,4 @@
-import { palette } from "@/design-system/tokens";
+import { palette, radius, spacing } from "@/design-system/tokens";
 import { DownloadsScreen } from "@/screens/downloads/DownloadsScreen";
 import { DetailsScreen } from "@/screens/details/DetailsScreen";
 import { HomeScreen } from "@/screens/home/HomeScreen";
@@ -12,7 +12,8 @@ import { completeOnboarding } from "@/utils/onboarding";
 import { useSound } from "@/services/sound/SoundContext";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { Platform } from "react-native";
+import { Platform, StyleSheet } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Home, Compass, Download, User } from "lucide-react-native";
 import type { StreamSource } from "@/types/provider";
 
@@ -43,6 +44,14 @@ export type TabParamList = {
   MySpace: undefined;
 };
 
+/** Screen titles follow the spec's four destinations; route names are stable. */
+const TAB_TITLES: Record<keyof TabParamList, string> = {
+  Home: "Home",
+  Discover: "Explore",
+  Downloads: "Downloads",
+  MySpace: "Profile",
+};
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<TabParamList>();
 
@@ -55,6 +64,7 @@ const TAB_ICONS = {
 
 function MainTabs() {
   const { play } = useSound();
+  const insets = useSafeAreaInsets();
   return (
     <Tabs.Navigator
       screenListeners={{
@@ -62,14 +72,28 @@ function MainTabs() {
       }}
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: "rgba(16,21,27,0.92)",
-          borderTopColor: palette.glassStroke,
-          borderTopWidth: 0.5,
-          height: 62,
-          paddingBottom: 8,
-          paddingTop: 6,
-        },
+        // Floating liquid-glass bar: a detached rounded panel above the safe
+        // area, not a full-width slab — content stays visible scrolling under.
+        tabBarStyle: [
+          {
+            position: "absolute",
+            left: spacing.xl,
+            right: spacing.xl,
+            bottom: Math.max(spacing.md, insets.bottom - 4),
+            backgroundColor: "rgba(13,17,23,0.86)",
+            borderColor: palette.glassStroke,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderRadius: radius.sheet,
+            height: 62,
+            paddingBottom: 8,
+            paddingTop: 6,
+            shadowColor: "#000",
+            shadowOpacity: 0.45,
+            shadowRadius: 24,
+            shadowOffset: { width: 0, height: 12 },
+            elevation: 14,
+          },
+        ],
         tabBarActiveTintColor: palette.accent,
         tabBarInactiveTintColor: palette.textMuted,
         tabBarLabelStyle: { fontSize: 10, fontWeight: "600", letterSpacing: 0.3 },
@@ -80,9 +104,9 @@ function MainTabs() {
       })}
     >
       <Tabs.Screen name="Home" component={HomeScreen} />
-      <Tabs.Screen name="Discover" component={DiscoverScreen} />
+      <Tabs.Screen name="Discover" component={DiscoverScreen} options={{ title: TAB_TITLES.Discover }} />
       <Tabs.Screen name="Downloads" component={DownloadsScreen} />
-      <Tabs.Screen name="MySpace" component={MySpaceScreen} options={{ title: "My Space" }} />
+      <Tabs.Screen name="MySpace" component={MySpaceScreen} options={{ title: TAB_TITLES.MySpace }} />
     </Tabs.Navigator>
   );
 }
