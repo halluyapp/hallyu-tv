@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { palette, spacing, typeScale } from "@/design-system/tokens";
+import { useSound } from "@/services/sound/SoundContext";
 import React, { useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -30,11 +31,14 @@ const STEPS = [
 export function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const [index, setIndex] = useState(0);
   const fade = useRef(new Animated.Value(1)).current;
+  const { play } = useSound();
   const insets = useSafeAreaInsets();
   const step = STEPS[index]!;
   const Icon = step.icon;
 
   const go = (next: number) => {
+    if (next >= STEPS.length) play("confirm");
+    else play("tap");
     Animated.timing(fade, { toValue: 0, duration: 140, useNativeDriver: true }).start(() => {
       if (next >= STEPS.length) {
         onDone();

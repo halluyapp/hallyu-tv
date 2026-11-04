@@ -1,6 +1,7 @@
 import { PosterCard } from "@/components/ui/PosterCard";
 import { EmptyState, ErrorState, SkeletonRail } from "@/components/ui/States";
 import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { useSound } from "@/services/sound/SoundContext";
 import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
 import { fetchHome } from "@/services/provider/adapter";
 import { useLibrary, ProgressRow } from "@/state/LibraryContext";
@@ -20,6 +21,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search, Play } from "lucide-react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { RootStackParamList, TabParamList } from "@/navigation/RootNavigator";
 import { APP_NAME } from "@/config/branding";
 
@@ -27,20 +29,32 @@ type Nav = NativeStackNavigationProp<RootStackParamList> & BottomTabNavigationPr
 
 /** Editorial hero pulled from the first catalogue section. */
 function Hero({ item, onPress, resume }: { item: CatalogueItem; onPress: () => void; resume: ProgressRow | null }) {
+  const { play } = useSound();
+  const open = useCallback(() => {
+    play("tap");
+    onPress();
+  }, [play, onPress]);
   return (
-    <Pressable onPress={onPress} style={styles.hero}>
+    <Pressable onPress={open} style={styles.hero}>
       {item.posterUrl ? (
         <Image source={{ uri: item.posterUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
       ) : null}
-      <View style={styles.heroScrim} />
+      <LinearGradient
+        colors={["rgba(8,10,13,0.10)", "rgba(8,10,13,0.45)", "rgba(8,10,13,0.96)"]}
+        locations={[0.3, 0.6, 1]}
+        style={StyleSheet.absoluteFill}
+      />
       <View style={styles.heroContent}>
-        <Text style={styles.heroBadge}>{resume ? "Continue Watching" : "Featured"}</Text>
+        <View style={styles.heroBadgeRow}>
+          <View style={styles.heroBadgeDot} />
+          <Text style={styles.heroBadge}>{resume ? "Continue Watching" : "Featured"}</Text>
+        </View>
         <Text style={styles.heroTitle}>{item.name}</Text>
         <Text style={styles.heroMeta}>
           {[item.year, item.genre?.split(",")[0], item.rating ? `IMDb ${item.rating}` : null].filter(Boolean).join(" · ")}
         </Text>
         <View style={styles.heroActions}>
-          <Pressable style={styles.playBtn} onPress={onPress}>
+          <Pressable style={styles.playBtn} onPress={open}>
             <Play size={14} color="#1A0E0A" fill="#1A0E0A" />
             <Text style={styles.playLabel}>{resume ? "Resume" : "View"}</Text>
           </Pressable>
@@ -71,6 +85,9 @@ function ContinueWatchingRail({ onOpen }: { onOpen: (p: ProgressRow) => void }) 
               <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.surfaceRaised }]} />
             )}
             <View style={styles.resumeScrim} />
+            <View style={styles.resumePlay}>
+              <Play size={13} color={palette.textPrimary} fill={palette.textPrimary} />
+            </View>
             <View style={styles.resumeBarTrack}>
               <View
                 style={[
@@ -131,6 +148,12 @@ export function HomeScreen() {
     },
     [navigation],
   );
+  const openProgress = useCallback(
+    (p: ProgressRow) => {
+      navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id });
+    },
+    [navigation],
+  );
 
   const heroProgress = heroItem ? latestFor(heroItem.subjectId) : null;
   const heroResume = heroProgress && !heroProgress.completed && heroProgress.position_seconds > 5 ? heroProgress : null;
@@ -166,13 +189,16 @@ export function HomeScreen() {
             heroItem ? (
               <View style={{ marginBottom: spacing.sm }}>
                 <Hero item={heroItem} onPress={() => openDetails(heroItem)} resume={heroResume} />
-                <ContinueWatchingRail onOpen={(p) => navigation.navigate("Details", { detailPath: p.detail_path ?? "", subjectId: p.subject_id })} />
+                <ContinueWatchingRail onOpen={openProgress} />
               </View>
             ) : null
           }
           renderItem={({ item: rail }) => (
             <View style={{ marginTop: spacing.lg }}>
-              <Text style={styles.railTitle}>{rail.section}</Text>
+              <View style={styles.railHeader}>
+                <View style={styles.railTick} />
+                <Text style={styles.railTitle}>{rail.section}</Text>
+              </View>
               <FlatList
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -224,12 +250,10 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: palette.surface,
   },
-  heroScrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(8,10,13,0.55)",
-  },
+  heroBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: spacing.xs },
+  heroBadgeDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: palette.accent },
+  heroBadge: { ...typeScale.micro, color: palette.accent },
   heroContent: { position: "absolute", left: spacing.xl, right: spacing.xl, bottom: spacing.xl, gap: spacing.xs },
-  heroBadge: { ...typeScale.micro, color: palette.accent, marginBottom: spacing.xs },
   heroTitle: { ...typeScale.display, color: palette.textPrimary },
   heroMeta: { ...typeScale.caption, color: palette.textSecondary, marginTop: 2 },
   heroActions: { flexDirection: "row", gap: spacing.md, marginTop: spacing.lg },
@@ -246,8 +270,6 @@ const styles = StyleSheet.create({
   railTitle: {
     ...typeScale.headline,
     color: palette.textPrimary,
-    paddingHorizontal: spacing.xl,
-    marginBottom: spacing.md,
   },
   resumeCard: {
     width: 150,
@@ -258,6 +280,21 @@ const styles = StyleSheet.create({
     marginRight: spacing.md,
   },
   resumeScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(8,10,13,0.35)" },
+  resumePlay: {
+    position: "absolute",
+    alignSelf: "center",
+    top: 78,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(8,10,13,0.62)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.glassStroke,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  railHeader: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.xl, marginBottom: spacing.md },
+  railTick: { width: 3, height: 14, borderRadius: 2, backgroundColor: palette.accent },
   resumeBarTrack: {
     position: "absolute",
     bottom: 34,

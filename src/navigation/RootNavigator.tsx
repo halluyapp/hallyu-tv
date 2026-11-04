@@ -9,6 +9,7 @@ import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
 import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
+import { useSound } from "@/services/sound/SoundContext";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Platform } from "react-native";
@@ -53,8 +54,12 @@ const TAB_ICONS = {
 } as const;
 
 function MainTabs() {
+  const { play } = useSound();
   return (
     <Tabs.Navigator
+      screenListeners={{
+        tabPress: () => play("tab"),
+      }}
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarStyle: {

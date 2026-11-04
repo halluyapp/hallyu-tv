@@ -1,4 +1,5 @@
 import { palette, radius, typeScale } from "@/design-system/tokens";
+import { useSound } from "@/services/sound/SoundContext";
 import React, { useCallback, useRef } from "react";
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View, ViewStyle } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -24,13 +25,17 @@ const VARIANTS: Record<Variant, { bg: string; fg: string; border?: string }> = {
 
 export function Button({ label, onPress, variant = "primary", icon, loading, disabled, style }: ButtonProps) {
   const scale = useRef(new Animated.Value(1)).current;
+  const { play } = useSound();
   const v = VARIANTS[variant];
   const isDisabled = disabled || loading;
 
   const onPressIn = useCallback(() => {
     Animated.spring(scale, { toValue: 0.965, useNativeDriver: true, speed: 40 }).start();
-    if (!isDisabled) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, [scale, isDisabled]);
+    if (!isDisabled) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      play("tap");
+    }
+  }, [scale, isDisabled, play]);
 
   const onPressOut = useCallback(() => {
     Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();

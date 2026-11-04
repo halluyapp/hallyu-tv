@@ -9,6 +9,7 @@ import { PickerSheet, QualityOptions, SubtitleOptions } from "./PickerSheets";
 import { pickRecoverySource, qualityOptions, selectableSources, selectSource } from "@/services/provider/streams";
 import { cueAt, parseSubtitles, Cue } from "@/services/subtitles/srt";
 import { useLibrary, COMPLETION_THRESHOLD } from "@/state/LibraryContext";
+import { useSound } from "@/services/sound/SoundContext";
 import { CaptionTrack, StreamSource } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -37,6 +38,7 @@ export function PlayerScreen() {
   const navigation = useNavigation<Nav>();
   const { subjectId, detailPath, title, mediaType, season, episode, sources, resumeAt } = route.params;
   const { saveProgress } = useLibrary();
+  const { play } = useSound();
   const insets = useSafeAreaInsets();
   const isTV = Platform.isTV;
 
@@ -99,11 +101,15 @@ export function PlayerScreen() {
     if (playing.isPlaying) setBuffering(false);
   }, [playing]);
 
-  const showError = useCallback((kind: PlayerErrorKind, detail?: string | null) => {
-    setStatus("error");
-    setBuffering(false);
-    setFailMessage(detail ?? playerErrorMessage(kind));
-  }, []);
+  const showError = useCallback(
+    (kind: PlayerErrorKind, detail?: string | null) => {
+      play("error");
+      setStatus("error");
+      setBuffering(false);
+      setFailMessage(detail ?? playerErrorMessage(kind));
+    },
+    [play],
+  );
 
   /** Replace the native player's source while preserving playback position. */
   const applySource = useCallback(

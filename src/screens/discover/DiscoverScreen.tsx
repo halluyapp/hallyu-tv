@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search as SearchIcon } from "lucide-react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -145,9 +146,32 @@ export function DiscoverScreen() {
   );
 }
 
+/** Deterministic per-genre duotone so each "world" keeps its own light. */
+const TILE_TINTS: [string, string][] = [
+  ["#F07855", "rgba(101,56,47,0.55)"],
+  ["#68B68D", "rgba(31,58,46,0.55)"],
+  ["#E5B35E", "rgba(74,58,34,0.55)"],
+  ["#E06B70", "rgba(67,40,42,0.55)"],
+  ["#7E8CE0", "rgba(42,46,67,0.55)"],
+  ["#E08CC4", "rgba(64,42,58,0.55)"],
+];
+
+function tintFor(label: string): [string, string] {
+  let h = 0;
+  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
+  return TILE_TINTS[h % TILE_TINTS.length]!;
+}
+
 function CategoryTile({ label, onPress }: { label: string; onPress: () => void }) {
+  const [glow, deep] = tintFor(label);
   return (
     <Pressable style={styles.category} onPress={onPress}>
+      <LinearGradient
+        colors={[glow, deep]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.categoryGlow}
+      />
       <Text style={styles.categoryLabel}>{label}</Text>
       <Text style={styles.categoryHint}>Browse</Text>
     </Pressable>
@@ -174,6 +198,7 @@ const styles = StyleSheet.create({
   category: {
     flex: 1 / 3,
     flexGrow: 1,
+    overflow: "hidden",
     backgroundColor: palette.glassFill,
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
@@ -182,6 +207,7 @@ const styles = StyleSheet.create({
     margin: spacing.xs,
     gap: 2,
   },
+  categoryGlow: { ...StyleSheet.absoluteFillObject, opacity: 0.34 },
   categoryLabel: { color: palette.textPrimary, fontWeight: "700", fontSize: 14 },
-  categoryHint: { color: palette.textMuted, fontSize: 11 },
+  categoryHint: { color: "rgba(244,242,237,0.66)", fontSize: 11 },
 });

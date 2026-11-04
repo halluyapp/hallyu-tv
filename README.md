@@ -17,6 +17,10 @@ downloads.
   - Other platforms fall back to `expo-file-system`.
 - Android TV leanback launcher support and a remote-friendly TV interface.
 - Premium “Obsidian Glass / Emberlight” dark UI preserved.
+- Emberlight UI sound design: six bundled interface tones (tap, confirm,
+  play swell, tab tick, soft error, download-complete bell) driven by a
+  `SoundProvider`/`useSound()` API (`src/services/sound/SoundContext.tsx`),
+  mutable from My Space; title audio is never touched.
 
 ## Provider contract
 

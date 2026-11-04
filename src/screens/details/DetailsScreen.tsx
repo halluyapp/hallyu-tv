@@ -7,6 +7,8 @@ import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
 import { selectDownloadSource } from "@/services/provider/streams";
 import { downloadManager } from "@/services/downloads/manager";
 import { useLibrary } from "@/state/LibraryContext";
+import { useSound } from "@/services/sound/SoundContext";
+import { LinearGradient } from "expo-linear-gradient";
 import { ProviderError, SeasonInfo, TitleDetail } from "@/types/provider";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -22,6 +24,7 @@ export function DetailsScreen() {
   const navigation = useNavigation<Nav>();
   const { detailPath } = route.params;
   const { inWatchlist, toggleWatchlist, resumeFor, latestFor, loading: libraryLoading } = useLibrary();
+  const { play: playTone } = useSound();
   const insets = useSafeAreaInsets();
 
   const [detail, setDetail] = useState<TitleDetail | null>(null);
@@ -84,6 +87,7 @@ export function DetailsScreen() {
       setResolutionError(null);
       try {
         const res = await resolveStreams(detail.subjectId, detail.detailPath, selSeason ?? 0, selEpisode ?? 0);
+        playTone("play");
         navigation.navigate("Player", {
           subjectId: detail.subjectId,
           detailPath: detail.detailPath,
@@ -96,12 +100,13 @@ export function DetailsScreen() {
           sources: res.sources,
         });
       } catch (err) {
+        playTone("error");
         setResolutionError(err instanceof ProviderError ? err.message : "Could not start playback. The provider may be busy — try again shortly.");
       } finally {
         setResolving(false);
       }
     },
-    [detail, resolving, navigation, currentSeason, episode],
+    [detail, resolving, navigation, currentSeason, episode, playTone],
   );
 
   const startDownload = useCallback(
@@ -132,16 +137,18 @@ export function DetailsScreen() {
         if (Platform.isTV) navigation.navigate("TvDownloads");
         else navigation.navigate("Main");
       } catch (err) {
+        playTone("error");
         setResolutionError(err instanceof ProviderError ? err.message : "Could not start the download.");
       } finally {
         setResolving(false);
       }
     },
-    [detail, resolving, navigation, currentSeason, episode],
+    [detail, resolving, navigation, currentSeason, episode, playTone],
   );
 
   const onWatchlist = useCallback(() => {
     if (!detail) return;
+    playTone(saved ? "tap" : "confirm");
     void toggleWatchlist({
       subject_id: detail.subjectId,
       detail_path: detail.detailPath,
@@ -149,7 +156,7 @@ export function DetailsScreen() {
       title: detail.title,
       poster_url: detail.posterUrl,
     });
-  }, [detail, toggleWatchlist]);
+  }, [detail, toggleWatchlist, saved, playTone]);
 
   if (error) {
     return (
@@ -169,7 +176,11 @@ export function DetailsScreen() {
         {detail.backdropUrl ?? detail.posterUrl ? (
           <Image source={{ uri: detail.backdropUrl ?? detail.posterUrl ?? "" }} style={StyleSheet.absoluteFill} resizeMode="cover" />
         ) : null}
-        <View style={styles.heroScrim} />
+        <LinearGradient
+          colors={["rgba(8,10,13,0.28)", "rgba(8,10,13,0.62)", "rgba(8,10,13,1)"]}
+          locations={[0, 0.55, 1]}
+          style={StyleSheet.absoluteFill}
+        />
         <Pressable style={[styles.backBtn, { top: insets.top + spacing.sm }]} onPress={() => navigation.goBack()} hitSlop={8}>
           <ChevronDown size={22} color={palette.textPrimary} />
         </Pressable>
@@ -301,7 +312,6 @@ export function DetailsScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
   heroWrap: { height: 300, backgroundColor: palette.surface },
-  heroScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(8,10,13,0.35)" },
   backBtn: {
     position: "absolute",
     left: spacing.lg,

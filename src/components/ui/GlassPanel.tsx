@@ -1,4 +1,5 @@
 import { palette, radius } from "@/design-system/tokens";
+import { useSound, type SoundName } from "@/services/sound/SoundContext";
 import React, { useCallback, useRef } from "react";
 import { Animated, Pressable, PressableProps, StyleProp, StyleSheet, View, ViewStyle } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -13,18 +14,22 @@ interface GlassPanelProps extends PressableProps {
   padding?: number;
   pressedScale?: number;
   haptic?: boolean;
+  /** UI tone played on press. Pass `false` to stay silent. */
+  sound?: SoundName | false;
 }
 
-export function GlassPanel({ children, style, padding, pressedScale = 0.97, haptic = false, ...rest }: GlassPanelProps) {
+export function GlassPanel({ children, style, padding, pressedScale = 0.97, haptic = false, sound = false, ...rest }: GlassPanelProps) {
   const scale = useRef(new Animated.Value(1)).current;
+  const { play } = useSound();
 
   const onPressIn = useCallback(
     (e: any) => {
       Animated.spring(scale, { toValue: pressedScale, useNativeDriver: true, speed: 40 }).start();
       if (haptic) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (sound) play(sound);
       rest.onPressIn?.(e);
     },
-    [scale, pressedScale, haptic, rest],
+    [scale, pressedScale, haptic, sound, play, rest],
   );
 
   const onPressOut = useCallback(

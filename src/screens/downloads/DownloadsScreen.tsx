@@ -6,9 +6,10 @@ import { absolutePathFor } from "@/services/downloads/fs";
 import { localFileUri } from "@/services/downloads/paths";
 import { DownloadJob } from "@/services/downloads/types";
 import { useLibrary } from "@/state/LibraryContext";
+import { useSound } from "@/services/sound/SoundContext";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CheckCircle2, Pause, Play as PlayIcon, Trash2, AlertTriangle, ArrowDownToLine } from "lucide-react-native";
@@ -35,13 +36,28 @@ function offlineUri(job: DownloadJob): string {
 export function DownloadsScreen() {
   const navigation = useNavigation<Nav>();
   const { resumeFor } = useLibrary();
+  const { play } = useSound();
   const insets = useSafeAreaInsets();
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
+  const prevStates = useRef(new Map<string, string>());
 
   useEffect(() => {
     void downloadManager.hydrate();
     return downloadManager.subscribe(setJobs);
   }, []);
+
+  // Answer state transitions with sound: a bell when a download lands, a soft
+  // low tone when one fails. First snapshot after mount stays silent.
+  useEffect(() => {
+    for (const job of jobs) {
+      const prev = prevStates.current.get(job.id);
+      if (prev !== undefined && prev !== job.state) {
+        if (job.state === "completed") play("complete");
+        else if (job.state === "failed") play("error");
+      }
+      prevStates.current.set(job.id, job.state);
+    }
+  }, [jobs, play]);
 
   const confirmDelete = (job: DownloadJob) =>
     Alert.alert("Delete download?", `“${job.title}” will be removed from this device.`, [

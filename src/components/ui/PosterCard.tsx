@@ -26,7 +26,7 @@ export const PosterCard = memo(function PosterCard({ item, width, onPress }: Pos
     .join("");
 
   return (
-    <GlassPanel onPress={onPress} style={{ width, marginRight: spacing.md }} pressedScale={0.95}>
+    <GlassPanel onPress={onPress} style={{ width, marginRight: spacing.md }} pressedScale={0.95} sound="tap">
       <View style={{ height, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface }}>
         {!failed && item.posterUrl ? (
           <>

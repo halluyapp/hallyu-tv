@@ -48,6 +48,9 @@ scripts/                    verify-provider.mjs, cdn-probe.mjs, icon generator
 4. Downloads use Android `DownloadManager` when available, otherwise
    `expo-file-system`. Files are verified on disk before becoming playable.
 5. Watchlist/progress are persisted to AsyncStorage on the device.
+6. UI sounds are short bundled MP3s played through expo-audio players that
+   live in the SoundProvider; the sound preference is device-local and
+   never affects video/audio playback of titles.
 
 ## Key invariants
 
