@@ -1,46 +1,60 @@
 import { PosterCard } from "@/components/ui/PosterCard";
 import { EmptyState, ErrorState, SkeletonRail } from "@/components/ui/States";
-import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { AmbientGlow } from "@/components/ui/AmbientGlow";
+import { palette, radius, spacing, gradients } from "@/design-system/tokens";
 import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
 import { fetchHome, searchCatalogue } from "@/services/provider/adapter";
 import { useNavigation } from "@react-navigation/native";
 import { useStage } from "@/hooks/useStage";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Search as SearchIcon } from "lucide-react-native";
+import { Search as SearchIcon, X } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/** Editorial moods, each mapped to a real catalogue genre search. */
 const MOODS: { label: string; query: string }[] = [
-  { label: "Mind-bending", query: "Sci-Fi" },
-  { label: "Feel-good", query: "Comedy" },
-  { label: "Late night", query: "Thriller" },
-  { label: "Family night", query: "Family" },
+  { label: "Trending", query: "Trending" },
   { label: "Adrenaline", query: "Action" },
-  { label: "Slow burn", query: "Drama" },
+  { label: "Slow Burn", query: "Drama" },
+  { label: "Mind-Bending", query: "Sci-Fi" },
+  { label: "Feel-Good", query: "Comedy" },
+  { label: "Late Night", query: "Thriller" },
+  { label: "Romantic", query: "Romance" },
+  { label: "Animation", query: "Anime" },
 ];
 
-/** Discover: genre/category browsing plus the search entry point. */
 export function DiscoverScreen() {
   const [sections, setSections] = useState<HomeSection[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [results, setResults] = useState<CatalogueItem[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, loadingMore: false });
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
   const stage = useStage();
+  const inputRef = useRef<TextInput>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const columns = stage.tier === "compact" ? 3 : stage.tier === "regular" ? 4 : 5;
   const cardWidth =
     stage.tier === "stage"
       ? stage.posterWidth
-      : Math.round((stage.width - stage.gutter * 2 - stage.cardGap * (columns - 1)) / columns);
+      : Math.round((stage.width - stage.gutter * 2 - spacing.md * (columns - 1)) / columns);
 
   useEffect(() => {
     fetchHome()
@@ -48,225 +62,230 @@ export function DiscoverScreen() {
       .catch((err) => setError(err instanceof ProviderError ? err.message : "Could not load categories."));
   }, []);
 
-  // Debounced search (300 ms) with stale-response protection.
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) {
+  const runSearch = useCallback(async (q: string, pageNum = 1) => {
+    const term = q.trim();
+    if (term.length < 2) {
       setResults(null);
       setSearching(false);
       return;
     }
     setSearching(true);
-    let stale = false;
-    const t = setTimeout(async () => {
-      try {
-        const page = await searchCatalogue(q);
-        if (!stale) {
-          setResults(page.items);
-          setPagination({ page: page.page, totalPages: page.totalPages, loadingMore: false });
-        }
-      } catch {
-        if (!stale) setResults([]);
-      } finally {
-        if (!stale) setSearching(false);
-      }
-    }, 300);
-    return () => {
-      stale = true;
-      clearTimeout(t);
-    };
-  }, [query]);
-
-  const queryRef = useRef(query);
-  queryRef.current = query;
-  const loadMore = useCallback(async () => {
-    const q = query.trim();
-    if (!results || pagination.loadingMore || pagination.page >= pagination.totalPages) return;
-    setPagination((p) => ({ ...p, loadingMore: true }));
     try {
-      const next = await searchCatalogue(q, pagination.page + 1);
-      if (queryRef.current.trim() !== q) return;
-      setResults((prev) => {
-        const seen = new Set((prev ?? []).map((i) => i.subjectId));
-        return [...(prev ?? []), ...next.items.filter((i) => !seen.has(i.subjectId))];
-      });
-      setPagination((p) => ({ ...p, page: next.page, totalPages: next.totalPages, loadingMore: false }));
+      const page = await searchCatalogue(term, pageNum);
+      setResults((prev) => (pageNum === 1 ? page.items : [...(prev ?? []), ...page.items]));
+      setPagination({ page: page.page, totalPages: page.totalPages, loadingMore: false });
     } catch {
-      if (queryRef.current.trim() === q) setPagination((p) => ({ ...p, loadingMore: false }));
+      setResults(pageNum === 1 ? [] : results);
+    } finally {
+      setSearching(false);
     }
-  }, [query, results, pagination]);
+  }, [results]);
 
-  const categories = useMemo(() => {
+  const onQueryChange = (text: string) => {
+    setQuery(text);
+    setSelectedMood(null);
+    if (debounce.current) clearTimeout(debounce.current);
+    debounce.current = setTimeout(() => void runSearch(text, 1), 400);
+  };
+
+  const clearSearch = () => {
+    setQuery("");
+    setSelectedMood(null);
+    setResults(null);
+  };
+
+  const onPickMood = (mood: { label: string; query: string }) => {
+    if (selectedMood === mood.label) {
+      setSelectedMood(null);
+      setResults(null);
+      return;
+    }
+    setSelectedMood(mood.label);
+    setQuery("");
+    void runSearch(mood.query, 1);
+  };
+
+  const loadMore = () => {
+    if (searching || pagination.loadingMore || pagination.page >= pagination.totalPages) return;
+    const term = (query || selectedMood || "").trim();
+    if (!term) return;
+    setPagination((prev) => ({ ...prev, loadingMore: true }));
+    void runSearch(term, pagination.page + 1);
+  };
+
+  const openDetails = (slug: string, subjectId: string) => {
+    navigation.navigate("Details", { detailPath: slug, subjectId });
+  };
+
+  const catalogueItems = useMemo(() => {
+    if (results !== null) return results;
+    if (!sections) return [];
+    const pool = sections.flatMap((s) => s.items);
     const seen = new Set<string>();
-    return (sections ?? [])
-      .filter((s) => s.section !== "Banner")
-      .flatMap((s) => s.items)
-      .filter((i) => {
-        if (!i.genre) return false;
-        const g = i.genre.split(",")[0]!.trim();
-        if (seen.has(g)) return false;
-        seen.add(g);
-        return true;
-      })
-      .slice(0, 18)
-      .map((i) => i.genre!.split(",")[0]!.trim());
-  }, [sections]);
+    return pool.filter((it) => (seen.has(it.subjectId) ? false : (seen.add(it.subjectId), true)));
+  }, [results, sections]);
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top + stage.cardGap }]}>
-      <Text style={[styles.title, { fontSize: stage.titleSize, paddingHorizontal: stage.gutter }]}>Explore</Text>
-      <View
-        style={[
-          styles.searchWrap,
-          { height: stage.controlSize, marginHorizontal: stage.gutter, paddingHorizontal: stage.cardGap },
-        ]}
-      >
-        <SearchIcon size={18} color={palette.textMuted} />
-        <TextInput
-          style={[styles.searchInput, { fontSize: stage.bodySize }]}
-          placeholder="Search films and series"
-          placeholderTextColor={palette.textMuted}
-          value={query}
-          onChangeText={setQuery}
-          returnKeyType="search"
-        />
+    <View style={[styles.root, { paddingTop: insets.top + spacing.xs }]}>
+      <AmbientGlow />
+
+      {/* Spatial Liquid Search Header */}
+      <View style={[styles.header, { paddingHorizontal: stage.gutter }]}>
+        <View style={styles.searchBar}>
+          <SearchIcon size={18} color={palette.textSecondary} />
+          <TextInput
+            ref={inputRef}
+            value={query}
+            onChangeText={onQueryChange}
+            placeholder="Search films, series, genres..."
+            placeholderTextColor={palette.textMuted}
+            style={styles.searchInput}
+            returnKeyType="search"
+            autoCorrect={false}
+          />
+          {searching ? (
+            <ActivityIndicator size="small" color={palette.accent} />
+          ) : query.length > 0 ? (
+            <Pressable onPress={clearSearch} hitSlop={10}>
+              <X size={18} color={palette.textSecondary} />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
-      {results !== null ? (
-        searching ? (
-          <SkeletonRail />
-        ) : results.length === 0 ? (
-          <EmptyState title="No matches" message={`Nothing found for “${query}”. Try a different search.`} />
-        ) : (
-          <FlatList
-            key={`results-${columns}`}
-            data={results}
-            numColumns={columns}
-            keyExtractor={(i) => i.subjectId}
-            onEndReached={() => void loadMore()}
-            onEndReachedThreshold={0.6}
-            contentContainerStyle={{ paddingHorizontal: stage.gutter, paddingBottom: stage.gutter * 2 }}
-            renderItem={({ item }) => (
-              <PosterCard
-                item={item}
-                width={cardWidth}
-                onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
-              />
-            )}
-          />
-        )
-      ) : error ? (
-        <ErrorState message={error} />
-      ) : sections === null ? (
-        <SkeletonRail />
+      {/* Horizontally scrollable Mood / Genre Liquid Pills */}
+      <View style={styles.moodsContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: stage.gutter, gap: 8 }}
+        >
+          {MOODS.map((m) => {
+            const isActive = selectedMood === m.label;
+            return (
+              <Pressable
+                key={m.label}
+                onPress={() => onPickMood(m)}
+                style={[
+                  styles.moodPill,
+                  isActive ? styles.moodPillActive : styles.moodPillInactive,
+                ]}
+              >
+                {isActive && (
+                  <LinearGradient
+                    colors={gradients.accent}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                )}
+                <Text style={[styles.moodLabel, isActive && styles.moodLabelActive]}>
+                  {m.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      {/* Grid of Results / Catalogue */}
+      {error && !sections ? (
+        <ErrorState message={error} onRetry={() => void fetchHome().then(setSections)} />
       ) : (
         <FlatList
-          data={categories}
-          numColumns={3}
-          keyExtractor={(c) => c}
-          contentContainerStyle={{ paddingHorizontal: stage.gutter, paddingBottom: stage.gutter * 2 }}
-          ListHeaderComponent={
-            <View style={styles.moodBlock}>
-              <Text style={styles.moodHeading}>Follow a feeling</Text>
-              <FlatList
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: spacing.sm }}
-                data={MOODS}
-                keyExtractor={(m) => m.label}
-                renderItem={({ item }) => (
-                  <Pressable
-                    style={styles.moodChip}
-                    onPress={() => setQuery(item.query)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Browse ${item.label} titles`}
-                  >
-                    <Text style={styles.moodLabel}>{item.label}</Text>
-                  </Pressable>
-                )}
+          data={catalogueItems}
+          keyExtractor={(item) => item.subjectId}
+          numColumns={columns}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.grid, { paddingHorizontal: stage.gutter, paddingBottom: 110 }]}
+          columnWrapperStyle={{ gap: spacing.md, marginBottom: spacing.md }}
+          renderItem={({ item }) => (
+            <PosterCard item={item} width={cardWidth} onPress={() => openDetails(item.slug, item.subjectId)} />
+          )}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          ListEmptyComponent={
+            searching ? (
+              <SkeletonRail count={6} itemWidth={cardWidth} />
+            ) : results !== null && results.length === 0 ? (
+              <EmptyState
+                title="No titles found"
+                message={`We couldn't find any films matching "${query || selectedMood}". Try another keyword or category.`}
               />
-            </View>
+            ) : null
           }
-          renderItem={({ item }) => <CategoryTile label={item} onPress={() => setQuery(item)} />}
+          ListFooterComponent={
+            pagination.loadingMore ? (
+              <View style={{ paddingVertical: spacing.lg, alignItems: "center" }}>
+                <ActivityIndicator color={palette.accent} size="small" />
+              </View>
+            ) : null
+          }
         />
       )}
     </View>
   );
 }
 
-/** Deterministic per-genre duotone so each "world" keeps its own light. */
-const TILE_TINTS: [string, string][] = [
-  ["#F07855", "rgba(101,56,47,0.55)"],
-  ["#68B68D", "rgba(31,58,46,0.55)"],
-  ["#E5B35E", "rgba(74,58,34,0.55)"],
-  ["#E06B70", "rgba(67,40,42,0.55)"],
-  ["#7E8CE0", "rgba(42,46,67,0.55)"],
-  ["#E08CC4", "rgba(64,42,58,0.55)"],
-];
-
-function tintFor(label: string): [string, string] {
-  let h = 0;
-  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
-  return TILE_TINTS[h % TILE_TINTS.length]!;
-}
-
-function CategoryTile({ label, onPress }: { label: string; onPress: () => void }) {
-  const [glow, deep] = tintFor(label);
-  return (
-    <Pressable style={styles.category} onPress={onPress}>
-      <LinearGradient
-        colors={[glow, deep]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.categoryGlow}
-      />
-      <Text style={styles.categoryLabel}>{label}</Text>
-      <Text style={styles.categoryHint}>Browse</Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: palette.background },
-  title: { ...typeScale.title, color: palette.textPrimary, paddingHorizontal: spacing.xl, marginBottom: spacing.md },
-  searchWrap: {
+  root: {
+    flex: 1,
+    backgroundColor: palette.background,
+  },
+  header: {
+    paddingVertical: spacing.sm,
+  },
+  searchBar: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    backgroundColor: palette.glassFill,
+    backgroundColor: palette.surfaceGlass,
+    borderColor: palette.glassStrokeBright,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.glassStroke,
     borderRadius: radius.pill,
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.lg,
-    paddingHorizontal: spacing.lg,
-    height: 44,
+    paddingHorizontal: 16,
+    height: 50,
+    gap: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 6,
   },
-  searchInput: { flex: 1, color: palette.textPrimary, fontSize: 15 },
-  moodBlock: { marginBottom: spacing.lg },
-  moodHeading: { ...typeScale.micro, color: palette.textSecondary, marginBottom: spacing.sm },
-  moodChip: {
+  searchInput: {
+    flex: 1,
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  moodsContainer: {
+    paddingVertical: spacing.sm,
+  },
+  moodPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+    position: "relative",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  moodPillInactive: {
     backgroundColor: palette.glassFillStrong,
     borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 8,
   },
-  moodLabel: { color: palette.textPrimary, fontSize: 13, fontWeight: "700" },
-  category: {
-    flex: 1 / 3,
-    flexGrow: 1,
-    overflow: "hidden",
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.md,
-    padding: spacing.lg,
-    margin: spacing.xs,
-    gap: 2,
+  moodPillActive: {
+    borderColor: palette.accentBright,
   },
-  categoryGlow: { ...StyleSheet.absoluteFillObject, opacity: 0.34 },
-  categoryLabel: { color: palette.textPrimary, fontWeight: "700", fontSize: 14 },
-  categoryHint: { color: "rgba(244,242,237,0.66)", fontSize: 11 },
+  moodLabel: {
+    color: palette.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  moodLabelActive: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+  },
+  grid: {
+    paddingTop: spacing.sm,
+  },
 });

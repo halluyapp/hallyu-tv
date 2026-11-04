@@ -1,24 +1,17 @@
 import { Poster, initialsFor } from "@/components/ui/Poster";
-import { glass, liftShadow } from "@/design-system/depth";
+import { liftShadow, glowShadow } from "@/design-system/depth";
 import { motion } from "@/design-system/motion";
 import type { Stage } from "@/design-system/stage";
-import { palette } from "@/design-system/tokens";
+import { palette, gradients, radius } from "@/design-system/tokens";
 import { canAffordAmbience } from "@/hooks/useDeviceTier";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useSound } from "@/services/sound/SoundContext";
 import type { CatalogueItem } from "@/types/provider";
 import { LinearGradient } from "expo-linear-gradient";
-import { Play } from "lucide-react-native";
+import { Play, Star, Sparkles, Tv, Film } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-native";
 
-/**
- * HeroStage — the title that owns the wall.
- *
- * Three light layers (art, scrim, ember spill), a slow camera drift that never
- * stops, and a crossfade to the next featured title. The whole panel is one
- * pressable target, so a remote can open it with a single OK.
- */
 export function HeroStage({
   items,
   stage,
@@ -35,21 +28,20 @@ export function HeroStage({
   const fade = useRef(new Animated.Value(1)).current;
   const drift = useRef(new Animated.Value(0)).current;
   const enter = useRef(new Animated.Value(0)).current;
+  const [isFocused, setIsFocused] = useState(false);
 
-  // Rotate the featured title. Paused for reduced motion and single-item sets.
   useEffect(() => {
     if (items.length < 2 || reduced) return;
     const timer = setInterval(() => {
-      Animated.timing(fade, { toValue: 0, duration: 520, useNativeDriver: true }).start(({ finished }) => {
+      Animated.timing(fade, { toValue: 0, duration: 450, useNativeDriver: true }).start(({ finished }) => {
         if (!finished) return;
         setIndex((current) => (current + 1) % items.length);
-        Animated.timing(fade, { toValue: 1, duration: 720, useNativeDriver: true }).start();
+        Animated.timing(fade, { toValue: 1, duration: 650, useNativeDriver: true }).start();
       });
-    }, 11_000);
+    }, 9000);
     return () => clearInterval(timer);
   }, [items.length, reduced, fade]);
 
-  // Ken Burns: the still image is never completely still.
   useEffect(() => {
     if (reduced || !afford) {
       drift.setValue(0);
@@ -59,23 +51,22 @@ export function HeroStage({
       Animated.sequence([
         Animated.timing(drift, {
           toValue: 1,
-          duration: 16_000,
-          easing: Easing.inOut(Easing.quad),
+          duration: 14000,
+          easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
         Animated.timing(drift, {
           toValue: 0,
-          duration: 16_000,
-          easing: Easing.inOut(Easing.quad),
+          duration: 14000,
+          easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
       ]),
     );
     loop.start();
     return () => loop.stop();
-  }, [drift, reduced, afford]);
+  }, [reduced, afford, drift]);
 
-  // One arrival per screen: the hero content settles after the art.
   useEffect(() => {
     if (reduced) {
       enter.setValue(1);
@@ -83,8 +74,7 @@ export function HeroStage({
     }
     const anim = Animated.timing(enter, {
       toValue: 1,
-      duration: motion.cinematic,
-      delay: 120,
+      duration: motion.slow,
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     });
@@ -92,153 +82,267 @@ export function HeroStage({
     return () => anim.stop();
   }, [enter, reduced]);
 
-  const current = items[index] ?? items[0];
+  const active = items[index] ?? items[0];
+  if (!active) return null;
 
-  const open = useCallback(() => {
-    if (!current) return;
-    play("play");
-    onOpen(current);
-  }, [current, onOpen, play]);
+  const handleOpen = useCallback(() => {
+    play("tap");
+    onOpen(active);
+  }, [play, onOpen, active]);
 
-  if (!current) return null;
+  const handleFocus = useCallback(() => {
+    setIsFocused(true);
+    play("tab");
+  }, [play]);
 
-  const radius = stage.focusRing * 7;
-  const contentWidth = Math.min(stage.width * 0.62, stage.width - stage.gutter * 2);
-  const enterY = enter.interpolate({ inputRange: [0, 1], outputRange: [20, 0] });
-  const artScale = drift.interpolate({ inputRange: [0, 1], outputRange: [1.02, 1.09] });
+  const handleBlur = useCallback(() => {
+    setIsFocused(false);
+  }, []);
+
+  const scale = drift.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
+  const translateX = drift.interpolate({ inputRange: [0, 1], outputRange: [0, -18] });
+  const translateY = enter.interpolate({ inputRange: [0, 1], outputRange: [20, 0] });
+  const isSeries = active.mediaType === "series";
 
   return (
-    <Pressable
-      onPress={open}
-      accessibilityRole="button"
-      accessibilityLabel={`Featured: ${current.name}`}
+    <Animated.View
       style={[
-        styles.hero,
-        liftShadow(2),
+        styles.root,
         {
           height: stage.heroHeight,
           marginHorizontal: stage.gutter,
-          borderRadius: radius,
+          marginBottom: stage.rowGap * 0.9,
+          borderRadius: radius.sheet,
+          opacity: enter,
+          transform: [{ translateY }],
         },
+        isFocused ? glowShadow(palette.accent, 28) : liftShadow(3),
       ]}
     >
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity: fade, transform: [{ scale: artScale }] }]}>
-        <Poster uri={current.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(current.name)} />
-      </Animated.View>
-
-      {/* Vertical scrim: the art falls into the room, never into the copy. */}
-      <LinearGradient
-        colors={["rgba(8,10,13,0.02)", "rgba(8,10,13,0.48)", "rgba(8,10,13,0.99)"]}
-        locations={[0.22, 0.62, 1]}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-      {/* Left scrim for copy legibility. */}
-      <LinearGradient
-        colors={["rgba(8,10,13,0.92)", "rgba(8,10,13,0.35)", "rgba(8,10,13,0)"]}
-        start={{ x: 0, y: 0.5 }}
-        end={{ x: 0.8, y: 0.5 }}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-      {/* Ember spill from the bottom-right corner: the projector's light. */}
-      <LinearGradient
-        colors={["rgba(240,120,85,0.30)", "rgba(240,120,85,0)"]}
-        start={{ x: 1, y: 1 }}
-        end={{ x: 0.15, y: 0.1 }}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-      {/* Top hairline: a glass edge catching the room light. */}
-      <View style={[StyleSheet.absoluteFill, { borderRadius: radius, borderTopWidth: 1, borderColor: glass.rim }]} pointerEvents="none" />
-
-      <Animated.View
-        style={{
-          position: "absolute",
-          left: stage.gutter * 1.15,
-          bottom: stage.gutter * 0.95,
-          width: contentWidth,
-          opacity: enter,
-          transform: [{ translateY: enterY }],
-        }}
+      <Pressable
+        onPress={handleOpen}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        accessibilityRole="button"
+        accessibilityLabel={`Featured: ${active.name}`}
+        style={[
+          styles.pressable,
+          {
+            borderRadius: radius.sheet,
+            borderColor: isFocused ? palette.accentBright : palette.glassStroke,
+            borderWidth: isFocused ? Math.max(2, stage.focusRing) : StyleSheet.hairlineWidth,
+          },
+        ]}
       >
-        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: stage.cardGap * 0.55 }}>
-          <View
-            style={{
-              width: Math.max(4, stage.u * 0.7),
-              height: Math.max(4, stage.u * 0.7),
-              borderRadius: 99,
-              backgroundColor: palette.accent,
-              marginRight: stage.cardGap * 0.5,
-            }}
-          />
-          <Text
-            style={{
-              color: palette.accentBright,
-              fontSize: Math.max(10, Math.round(stage.metaSize * 0.95)),
-              fontWeight: "800",
-              letterSpacing: Math.max(1, stage.metaSize * 0.16),
-              textTransform: "uppercase",
-            }}
-          >
-            {index === 0 ? "Featured tonight" : "Up next"}
-          </Text>
-        </View>
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity: fade, transform: [{ scale }, { translateX }] }]}>
+          <Poster uri={active.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(active.name)} />
+        </Animated.View>
 
-        <Text
-          numberOfLines={2}
-          style={{
-            color: palette.textPrimary,
-            fontSize: stage.heroTitleSize,
-            fontWeight: "800",
-            letterSpacing: -stage.heroTitleSize * 0.025,
-            lineHeight: Math.round(stage.heroTitleSize * 1.08),
-          }}
-        >
-          {current.name}
-        </Text>
+        {/* Ambient Cinema Scrims */}
+        <LinearGradient
+          colors={["transparent", "rgba(4, 6, 10, 0.45)", "rgba(4, 6, 10, 0.94)", "#04060A"]}
+          locations={[0, 0.45, 0.8, 1]}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+        <LinearGradient
+          colors={["rgba(4, 6, 10, 0.85)", "rgba(4, 6, 10, 0.4)", "transparent"]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 0.85, y: 0.5 }}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
 
-        <Text
-          numberOfLines={1}
-          style={{
-            color: palette.textSecondary,
-            fontSize: Math.max(13, Math.round(stage.u * 2.45)),
-            marginTop: stage.cardGap * 0.55,
-          }}
-        >
-          {[current.year, current.genre?.split(",")[0], current.rating ? `IMDb ${current.rating}` : null]
-            .filter(Boolean)
-            .join("  ·  ")}
-        </Text>
+        {/* Liquid glass specular top sheen */}
+        <LinearGradient
+          colors={gradients.glassSheen}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0.8, y: 0.6 }}
+          style={styles.topSheen}
+          pointerEvents="none"
+        />
 
-        <View style={{ flexDirection: "row", alignItems: "center", marginTop: stage.cardGap * 1.1 }}>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              backgroundColor: palette.accent,
-              borderRadius: 999,
-              paddingHorizontal: Math.max(20, stage.u * 3.2),
-              paddingVertical: Math.max(10, stage.u * 1.35),
-            }}
-          >
-            <Play size={Math.max(15, Math.round(stage.u * 2.7))} color={glass.ink} fill={glass.ink} />
-            <Text style={{ color: glass.ink, fontWeight: "800", fontSize: Math.max(14, Math.round(stage.u * 2.6)), marginLeft: 8 }}>
-              Open
-            </Text>
+        {/* Floating Glass Metadata Container */}
+        <View style={[styles.floatingCard, { padding: stage.cardGap * 1.2 }]}>
+          {/* Glass Badges */}
+          <View style={styles.badgeRow}>
+            <View style={styles.featuredBadge}>
+              <Sparkles size={11} color="#FF5E3A" />
+              <Text style={styles.featuredText}>FEATURED</Text>
+            </View>
+
+            <View style={styles.glassPill}>
+              {isSeries ? <Tv size={11} color={palette.textSecondary} /> : <Film size={11} color={palette.textSecondary} />}
+              <Text style={styles.pillText}>{isSeries ? "Series" : "Movie"}</Text>
+            </View>
+
+            {active.rating ? (
+              <View style={styles.glassPill}>
+                <Star size={11} color="#FBBF24" fill="#FBBF24" />
+                <Text style={[styles.pillText, { color: "#FFFFFF", fontWeight: "700" }]}>{active.rating}</Text>
+              </View>
+            ) : null}
+
+            {active.year ? (
+              <View style={styles.glassPill}>
+                <Text style={styles.pillText}>{active.year}</Text>
+              </View>
+            ) : null}
           </View>
-          <Text style={{ color: palette.textMuted, fontSize: Math.max(11, Math.round(stage.u * 2.1)), marginLeft: stage.cardGap * 1.2 }}>
-            {`${index + 1} / ${items.length}`}
+
+          {/* Title with cinematic typography */}
+          <Text
+            numberOfLines={2}
+            style={[
+              styles.heroTitle,
+              {
+                fontSize: stage.heroTitleSize,
+                lineHeight: Math.round(stage.heroTitleSize * 1.15),
+              },
+            ]}
+          >
+            {active.name}
           </Text>
+
+          {/* Action Row */}
+          <View style={styles.actionRow}>
+            <LinearGradient
+              colors={gradients.accent}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={[
+                styles.watchButton,
+                {
+                  height: Math.max(38, stage.controlSize * 0.75),
+                  paddingHorizontal: stage.cardGap * 1.2,
+                  borderRadius: radius.pill,
+                },
+              ]}
+            >
+              <Play size={Math.max(14, stage.u * 3.5)} color="#FFFFFF" fill="#FFFFFF" />
+              <Text style={[styles.watchText, { fontSize: Math.max(13, stage.bodySize) }]}>Watch Now</Text>
+            </LinearGradient>
+
+            {/* Carousel Laser Indicators */}
+            {items.length > 1 ? (
+              <View style={styles.indicatorRow}>
+                {items.map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.indicatorBar,
+                      {
+                        width: i === index ? 24 : 8,
+                        backgroundColor: i === index ? palette.accent : "rgba(255, 255, 255, 0.2)",
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
+            ) : null}
+          </View>
         </View>
-      </Animated.View>
-    </Pressable>
+      </Pressable>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: {
+  root: {
     overflow: "hidden",
-    backgroundColor: palette.surface,
+    position: "relative",
+  },
+  pressable: {
+    flex: 1,
+    overflow: "hidden",
+    position: "relative",
+  },
+  topSheen: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: "40%",
+  },
+  floatingCard: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    justifyContent: "flex-end",
+  },
+  badgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+    flexWrap: "wrap",
+  },
+  featuredBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255, 94, 58, 0.16)",
+    borderColor: "rgba(255, 94, 58, 0.45)",
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: radius.pill,
+  },
+  featuredText: {
+    color: "#FF5E3A",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+  },
+  glassPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderColor: "rgba(255, 255, 255, 0.15)",
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: radius.pill,
+  },
+  pillText: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  heroTitle: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    letterSpacing: -0.6,
+    marginBottom: 12,
+  },
+  actionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  watchButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    shadowColor: palette.accent,
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  watchText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
+  indicatorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  indicatorBar: {
+    height: 4,
+    borderRadius: 2,
   },
 });

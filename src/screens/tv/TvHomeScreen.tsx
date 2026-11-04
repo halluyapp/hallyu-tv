@@ -2,9 +2,10 @@ import { StageRail, type RailEntry } from "@/components/stage/StageRail";
 import { HeroStage } from "@/components/tv/HeroStage";
 import { TvSpine, type SpineItem } from "@/components/tv/TvSpine";
 import { EmptyState, ErrorState } from "@/components/ui/States";
+import { AmbientGlow } from "@/components/ui/AmbientGlow";
 import { stagger } from "@/design-system/motion";
 import type { Stage } from "@/design-system/stage";
-import { palette } from "@/design-system/tokens";
+import { palette, radius } from "@/design-system/tokens";
 import { useStage } from "@/hooks/useStage";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
@@ -14,18 +15,11 @@ import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Download, Home as HomeIcon, MonitorSmartphone, Search } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, View } from "react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Open = (detailPath: string, subjectId: string) => void;
 
-/**
- * The Stage — the 10-foot home.
- *
- * Everything here is measured from `useStage()`, so a 55" panel driven by an
- * Android box gets television proportions instead of a phone layout stretched
- * over glass. The spine carries identity; the wall carries the catalogue.
- */
 export function TvHomeScreen() {
   const stage = useStage();
   const navigation = useNavigation<Nav>();
@@ -43,7 +37,6 @@ export function TvHomeScreen() {
     }
   }, []);
 
-  // Instant paint from the last known catalogue, then revalidate.
   useEffect(() => {
     let mounted = true;
     void hydrateHome().then((cached) => {
@@ -63,56 +56,71 @@ export function TvHomeScreen() {
     [navigation],
   );
 
+  const spineItems: SpineItem[] = useMemo(
+    () => [
+      {
+        key: "search",
+        label: "Search",
+        icon: Search,
+        onPress: () => navigation.navigate("TvSearch"),
+      },
+      {
+        key: "home",
+        label: "Home",
+        icon: HomeIcon,
+        onPress: () => {},
+      },
+      {
+        key: "downloads",
+        label: "Downloads",
+        icon: Download,
+        onPress: () => navigation.navigate("TvDownloads"),
+      },
+      {
+        key: "settings",
+        label: "Settings",
+        icon: MonitorSmartphone,
+        onPress: () => navigation.navigate("TvSettings"),
+      },
+    ],
+    [navigation],
+  );
+
   const heroes = useMemo(() => {
-    const banner = (sections ?? []).find((section) => section.section === "Banner")?.items ?? [];
-    const everything = (sections ?? []).flatMap((section) => section.items);
+    const banner = (sections ?? []).find((s) => s.section === "Banner")?.items ?? [];
+    const everything = (sections ?? []).flatMap((s) => s.items);
     const seen = new Set<string>();
     return [...banner, ...everything]
-      .filter((item) => (seen.has(item.subjectId) ? false : (seen.add(item.subjectId), true)))
-      .slice(0, 4);
+      .filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)))
+      .slice(0, 5);
   }, [sections]);
 
   const rails = useMemo(
-    () => (sections ?? []).filter((section) => section.items.length > 0 && section.section !== "Banner"),
+    () => (sections ?? []).filter((s) => s.items.length > 0 && s.section !== "Banner"),
     [sections],
   );
 
   const resume = useMemo(
-    () => progress.filter((row) => !row.completed && row.position_seconds > 5).slice(0, 20),
+    () => progress.filter((r) => !r.completed && r.position_seconds > 5).slice(0, 20),
     [progress],
   );
 
-  const resumeEntries = useMemo(() => resume.map((row) => toResumeEntry(row, open)), [resume, open]);
-  const watchlistEntries = useMemo(
-    () => watchlist.map((item) => toLibraryEntry(item, open)),
-    [watchlist, open],
-  );
-
-  const spineItems = useMemo<SpineItem[]>(
-    () => [
-      { key: "home", label: "Home", icon: HomeIcon, onPress: () => {} },
-      { key: "search", label: "Search", icon: Search, onPress: () => navigation.navigate("TvSearch") },
-      { key: "downloads", label: "Downloads", icon: Download, onPress: () => navigation.navigate("TvDownloads") },
-      // The TV stack has no profile tab; Display is the way back to phone layout.
-      { key: "display", label: "Display", icon: MonitorSmartphone, onPress: () => navigation.navigate("TvSettings") },
-    ],
-    [navigation],
-  );
+  const resumeEntries = useMemo(() => resume.map((r) => toResumeEntry(r, open)), [resume, open]);
+  const watchlistEntries = useMemo(() => watchlist.map((item) => toLibraryEntry(item, open)), [watchlist, open]);
 
   const empty = sections !== null && heroes.length === 0 && rails.length === 0;
 
   return (
     <View style={styles.root}>
+      <AmbientGlow />
+
       <View style={styles.body}>
-        <TvSpine stage={stage} items={spineItems} active="home" />
+        <TvSpine items={spineItems} stage={stage} active="home" />
 
         <ScrollView
           style={styles.wall}
+          contentContainerStyle={{ paddingBottom: stage.gutter * 2 }}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{
-            paddingTop: stage.gutter * 0.8,
-            paddingBottom: stage.gutter * 2,
-          }}
         >
           {loadError && sections === null ? (
             <ErrorState message={loadError} onRetry={() => void load()} />
@@ -121,15 +129,28 @@ export function TvHomeScreen() {
           {sections === null && !loadError ? <LoadingStage stage={stage} /> : null}
 
           {empty ? (
-            <EmptyState title="Nothing here yet" message="The catalogue is empty right now. Try again in a moment." />
+            <EmptyState
+              title="Nothing on the stage"
+              message="The catalogue is empty. Check your connection or retry."
+            />
           ) : null}
 
           {heroes.length > 0 ? (
-            <HeroStage items={heroes} stage={stage} onOpen={(item) => open(item.slug, item.subjectId)} />
+            <HeroStage
+              items={heroes}
+              stage={stage}
+              onOpen={(item) => open(item.slug, item.subjectId)}
+            />
           ) : null}
 
           {resumeEntries.length > 0 ? (
-            <StageRail label="Continue watching" entries={resumeEntries} stage={stage} delay={40} preferredFocus />
+            <StageRail
+              label="Continue Watching"
+              entries={resumeEntries}
+              stage={stage}
+              delay={40}
+              preferredFocus
+            />
           ) : null}
 
           {rails.map((section, index) => (
@@ -152,7 +173,7 @@ export function TvHomeScreen() {
 
           {watchlistEntries.length > 0 ? (
             <StageRail
-              label="Watchlist"
+              label="Saved to Watchlist"
               entries={watchlistEntries}
               stage={stage}
               delay={60 + rails.length * stagger}
@@ -202,52 +223,17 @@ function sectionLabel(raw: string): string {
 
 function LoadingStage({ stage }: { stage: Stage }) {
   return (
-    <View>
+    <View style={{ paddingTop: stage.gutter }}>
       <View
         style={{
           height: stage.heroHeight,
           marginHorizontal: stage.gutter,
-          borderRadius: stage.focusRing * 7,
-          backgroundColor: palette.surface,
-          opacity: 0.7,
+          borderRadius: radius.card,
+          backgroundColor: palette.glassFillStrong,
+          borderColor: palette.glassStroke,
+          borderWidth: StyleSheet.hairlineWidth,
         }}
       />
-      {[0, 1, 2].map((row) => (
-        <View key={row} style={{ marginTop: stage.rowGap }}>
-          <View
-            style={{
-              height: Math.round(stage.railTitleSize * 0.8),
-              width: stage.gutter * 6,
-              marginLeft: stage.gutter,
-              borderRadius: 4,
-              backgroundColor: palette.surfaceRaised,
-            }}
-          />
-          <View
-            style={{
-              flexDirection: "row",
-              gap: stage.cardGap,
-              paddingHorizontal: stage.gutter,
-              marginTop: stage.cardGap,
-            }}
-          >
-            {[0, 1, 2, 3, 4].map((card) => (
-              <View
-                key={card}
-                style={{
-                  width: stage.posterWidth,
-                  height: stage.posterHeight,
-                  borderRadius: stage.focusRing * 5,
-                  backgroundColor: palette.surface,
-                }}
-              />
-            ))}
-          </View>
-        </View>
-      ))}
-      <Text style={{ color: palette.textMuted, fontSize: stage.metaSize, marginLeft: stage.gutter, marginTop: stage.rowGap }}>
-        Laying the stage…
-      </Text>
     </View>
   );
 }

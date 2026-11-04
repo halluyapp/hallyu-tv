@@ -1,4 +1,4 @@
-import { palette, radius, spacing } from "@/design-system/tokens";
+import { palette, radius, spacing, gradients } from "@/design-system/tokens";
 import { DownloadsScreen } from "@/screens/downloads/DownloadsScreen";
 import { DetailsScreen } from "@/screens/details/DetailsScreen";
 import { HomeScreen } from "@/screens/home/HomeScreen";
@@ -14,7 +14,8 @@ import { useSound } from "@/services/sound/SoundContext";
 import { useStage } from "@/hooks/useStage";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { StyleSheet } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Home, Compass, Download, User } from "lucide-react-native";
 import type { StreamSource } from "@/types/provider";
@@ -49,7 +50,6 @@ export type TabParamList = {
   MySpace: undefined;
 };
 
-/** Screen titles follow the spec's four destinations; route names are stable. */
 const TAB_TITLES: Record<keyof TabParamList, string> = {
   Home: "Home",
   Discover: "Explore",
@@ -70,6 +70,7 @@ const TAB_ICONS = {
 function MainTabs() {
   const { play } = useSound();
   const insets = useSafeAreaInsets();
+
   return (
     <Tabs.Navigator
       screenListeners={{
@@ -77,34 +78,42 @@ function MainTabs() {
       }}
       screenOptions={({ route }) => ({
         headerShown: false,
-        // Floating liquid-glass bar: a detached rounded panel above the safe
-        // area, not a full-width slab — content stays visible scrolling under.
+        tabBarBackground: () => (
+          <View style={StyleSheet.absoluteFill}>
+            {/* Top glass sheen */}
+            <LinearGradient
+              colors={gradients.glassSheen}
+              start={{ x: 0.1, y: 0 }}
+              end={{ x: 0.9, y: 0.6 }}
+              style={styles.dockSheen}
+              pointerEvents="none"
+            />
+            {/* Top specular hairline edge */}
+            <View style={styles.dockSpecularRim} pointerEvents="none" />
+          </View>
+        ),
         tabBarStyle: [
+          styles.floatingDock,
           {
-            position: "absolute",
-            left: spacing.xl,
-            right: spacing.xl,
-            bottom: Math.max(spacing.md, insets.bottom - 4),
-            backgroundColor: "rgba(13,17,23,0.86)",
-            borderColor: palette.glassStroke,
-            borderWidth: StyleSheet.hairlineWidth,
-            borderRadius: radius.sheet,
-            height: 62,
-            paddingBottom: 8,
-            paddingTop: 6,
-            shadowColor: "#000",
-            shadowOpacity: 0.45,
-            shadowRadius: 24,
-            shadowOffset: { width: 0, height: 12 },
-            elevation: 14,
+            bottom: Math.max(spacing.md, insets.bottom + 4),
           },
         ],
         tabBarActiveTintColor: palette.accent,
         tabBarInactiveTintColor: palette.textMuted,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: "600", letterSpacing: 0.3 },
-        tabBarIcon: ({ color }) => {
+        tabBarLabelStyle: {
+          fontSize: 10,
+          fontWeight: "700",
+          letterSpacing: 0.3,
+          marginTop: -2,
+        },
+        tabBarIcon: ({ color, focused }) => {
           const Icon = TAB_ICONS[route.name as keyof typeof TAB_ICONS];
-          return <Icon color={color} size={21} strokeWidth={1.8} />;
+          return (
+            <View style={[styles.iconWrapper, focused && styles.iconActive]}>
+              <Icon color={focused ? palette.accentBright : color} size={21} strokeWidth={focused ? 2.4 : 1.8} />
+              {focused ? <View style={styles.activeDot} /> : null}
+            </View>
+          );
         },
       })}
     >
@@ -116,10 +125,6 @@ function MainTabs() {
   );
 }
 
-/**
- * TV devices get an independent 10-foot stack; phones/tablets get the mobile
- * tabs. Neither requires an account, pairing, or another device.
- */
 export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
   const stage = useStage();
   if (stage.remote) {
@@ -155,3 +160,58 @@ export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
     </Stack.Navigator>
   );
 }
+
+const styles = StyleSheet.create({
+  floatingDock: {
+    position: "absolute",
+    left: spacing.lg,
+    right: spacing.lg,
+    height: 64,
+    borderRadius: radius.dock,
+    backgroundColor: "rgba(12, 17, 26, 0.88)",
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingBottom: 6,
+    paddingTop: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.55,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 18,
+    overflow: "hidden",
+  },
+  dockSheen: {
+    ...StyleSheet.absoluteFillObject,
+    height: "55%",
+  },
+  dockSpecularRim: {
+    position: "absolute",
+    top: 0,
+    left: "10%",
+    right: "10%",
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.35)",
+  },
+  iconWrapper: {
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+    width: 36,
+    height: 28,
+  },
+  iconActive: {
+    transform: [{ scale: 1.08 }],
+  },
+  activeDot: {
+    position: "absolute",
+    bottom: -4,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: palette.accent,
+    shadowColor: palette.accent,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+});

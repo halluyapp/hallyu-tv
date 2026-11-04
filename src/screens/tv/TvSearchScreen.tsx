@@ -4,6 +4,7 @@ import { RootStackParamList } from "@/navigation/RootNavigator";
 import { searchCatalogue } from "@/services/provider/adapter";
 import { CatalogueItem } from "@/types/provider";
 import { Poster, initialsFor } from "@/components/ui/Poster";
+import { AmbientGlow } from "@/components/ui/AmbientGlow";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
 import { ChevronLeft, Search } from "lucide-react-native";
@@ -12,13 +13,13 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, Vi
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/** TV search — type with the remote (IME) or an attached keyboard; d-pad to browse results. */
 export function TvSearchScreen() {
   const navigation = useNavigation<Nav>();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CatalogueItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
+  const [backFocused, setBackFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stage = useStage();
@@ -55,40 +56,44 @@ export function TvSearchScreen() {
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
+      <AmbientGlow />
+
+      <View style={[styles.header, { paddingHorizontal: stage.gutter, paddingTop: stage.gutter }]}>
         <Pressable
           onPress={() => navigation.goBack()}
-          style={[
-            styles.backBtn,
-            { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 },
-          ]}
-          hasTVPreferredFocus={results === null}
+          onFocus={() => setBackFocused(true)}
+          onBlur={() => setBackFocused(false)}
+          style={[styles.backBtn, backFocused && styles.backBtnFocused]}
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <ChevronLeft size={22} color={palette.textPrimary} />
+          <ChevronLeft size={22} color="#FFFFFF" />
         </Pressable>
-        <View style={[styles.inputWrap, { height: stage.controlSize, paddingHorizontal: stage.cardGap }]}>
-          <Search size={16} color={palette.textMuted} />
+
+        <View style={styles.inputWrap}>
+          <Search size={20} color={palette.textSecondary} />
           <TextInput
             ref={inputRef}
             value={query}
             onChangeText={setQuery}
-            placeholder="Search titles…"
+            placeholder="Search on TV..."
             placeholderTextColor={palette.textMuted}
-            style={[styles.input, { fontSize: stage.bodySize }]}
+            style={styles.input}
             returnKeyType="search"
-            onSubmitEditing={() => void run(query)}
-            autoFocus
+            autoCorrect={false}
           />
         </View>
       </View>
 
-      {loading ? <ActivityIndicator style={{ marginTop: spacing.xxl }} size="large" color={palette.accent} /> : null}
+      {loading ? (
+        <View style={{ marginTop: spacing.xxl, alignItems: "center" }}>
+          <ActivityIndicator size="large" color={palette.accent} />
+        </View>
+      ) : null}
 
       {results !== null && !loading ? (
         results.length === 0 ? (
-          <Text style={styles.empty}>Nothing matched “{query}”.</Text>
+          <Text style={[styles.empty, { paddingHorizontal: stage.gutter }]}>Nothing matched “{query}”.</Text>
         ) : (
           <FlatList
             key={`grid-${columns}`}
@@ -111,7 +116,7 @@ export function TvSearchScreen() {
                   style={[styles.poster, { width: cardWidth, height: posterHeight }]}
                   initials={initialsFor(item.name)}
                 />
-                <Text style={[styles.cardTitle, { fontSize: stage.cardTitleSize }]} numberOfLines={2}>
+                <Text style={[styles.cardTitle, { fontSize: stage.cardTitleSize }]} numberOfLines={1}>
                   {item.name}
                 </Text>
                 <Text style={[styles.cardMeta, { fontSize: stage.metaSize }]}>
@@ -123,50 +128,69 @@ export function TvSearchScreen() {
         )
       ) : null}
 
-      {results === null && !loading ? <Text style={styles.hint}>Type at least two characters.</Text> : null}
+      {results === null && !loading ? (
+        <Text style={[styles.hint, { paddingHorizontal: stage.gutter }]}>Type at least two letters using the keyboard.</Text>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
-  header: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.lg },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingBottom: spacing.lg,
+  },
   backBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
+  },
+  backBtnFocused: {
+    borderColor: palette.accentBright,
+    backgroundColor: "rgba(255, 94, 58, 0.2)",
+    transform: [{ scale: 1.08 }],
   },
   inputWrap: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
+    backgroundColor: palette.surfaceGlass,
+    borderColor: palette.glassStrokeBright,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.pill,
     paddingHorizontal: spacing.lg,
-    height: 48,
+    height: 52,
   },
-  input: { flex: 1, color: palette.textPrimary, fontSize: 16, paddingVertical: 0 },
-  grid: { gap: spacing.lg, paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
-  card: { borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface },
+  input: { flex: 1, color: "#FFFFFF", fontSize: 16, paddingVertical: 0 },
+  grid: { gap: spacing.lg, paddingBottom: spacing.xxl },
+  card: {
+    borderRadius: radius.md,
+    overflow: "hidden",
+    backgroundColor: palette.surfaceGlass,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 6,
+  },
   cardFocused: {
-    transform: [{ scale: 1.05 }],
+    transform: [{ scale: 1.06 }],
+    borderColor: palette.accentBright,
     shadowColor: palette.accent,
-    shadowOpacity: 0.45,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 18,
     elevation: 10,
   },
-  poster: { backgroundColor: palette.surfaceRaised },
-  cardTitle: { color: palette.textPrimary, fontWeight: "600", padding: spacing.sm, paddingBottom: 0 },
-  cardMeta: { color: palette.textMuted, padding: spacing.sm, paddingTop: 2 },
-  empty: { color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xl },
-  hint: { color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xl },
+  poster: { borderRadius: radius.sm },
+  cardTitle: { color: "#FFFFFF", fontWeight: "600", paddingHorizontal: 4, marginTop: 6 },
+  cardMeta: { color: palette.textMuted, paddingHorizontal: 4, marginTop: 2, marginBottom: 4 },
+  empty: { color: palette.textMuted, marginTop: spacing.xl },
+  hint: { color: palette.textMuted, marginTop: spacing.xl },
 });

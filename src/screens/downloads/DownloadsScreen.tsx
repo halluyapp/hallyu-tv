@@ -1,6 +1,7 @@
 import { EmptyState } from "@/components/ui/States";
+import { AmbientGlow } from "@/components/ui/AmbientGlow";
 import { Poster, initialsFor } from "@/components/ui/Poster";
-import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { palette, radius, spacing, gradients } from "@/design-system/tokens";
 import { useStage } from "@/hooks/useStage";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { downloadManager } from "@/services/downloads/manager";
@@ -15,10 +16,12 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   ArrowDownToLine,
   CheckCircle2,
-  ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   Circle,
   HardDrive,
   ListChecks,
@@ -26,7 +29,6 @@ import {
   Play as PlayIcon,
   Trash2,
   AlertTriangle,
-  XCircle,
 } from "lucide-react-native";
 import { formatBytes } from "@/utils/format";
 
@@ -77,7 +79,6 @@ export function DownloadsScreen() {
   const prevStates = useRef(new Map<string, string>());
   const samplesRef = useRef(new Map<string, { t: number; bytes: number }>());
 
-  // Real device capacity — measured from the platform, never invented.
   useEffect(() => {
     void LegacyFileSystem.freeDiskBytes().then(setFreeBytes);
   }, []);
@@ -87,15 +88,12 @@ export function DownloadsScreen() {
     return downloadManager.subscribe(setJobs);
   }, []);
 
-  // Answer state transitions with sound: a bell when a download lands, a soft
-  // low tone when one fails. First snapshot after mount stays silent.
   useEffect(() => {
     for (const job of jobs) {
       const prev = prevStates.current.get(job.id);
       if (prev !== undefined && prev !== job.state) {
         if (job.state === "completed") {
           play("complete");
-          // Bring the subtitles along so the offline copy is complete too.
           void prefetchSubtitles(job.subjectId, job.detailPath, job.season ?? null, job.episode ?? null);
         } else if (job.state === "failed") play("error");
       }
@@ -103,7 +101,6 @@ export function DownloadsScreen() {
     }
   }, [jobs, play]);
 
-  // Transfer rate + ETA from byte deltas between snapshots (~1s poll cadence).
   useEffect(() => {
     const now = Date.now();
     const next = new Map<string, SpeedSample>();
@@ -129,19 +126,12 @@ export function DownloadsScreen() {
 
   const usedBytes = jobs.reduce((sum, j) => sum + (j.state === "completed" ? j.totalBytes ?? 0 : j.receivedBytes), 0);
 
-  const activeSelected = useMemo(
-    () => Array.from(selected).filter((id) => {
-      const j = jobs.find((x) => x.id === id);
-      return j && j.state !== "completed" && j.state !== "failed" && j.state !== "cancelled";
-    }),
-    [selected, jobs],
-  );
+
   const removableSelected = useMemo(
     () => Array.from(selected).filter((id) => jobs.some((j) => j.id === id && j.state === "completed")),
     [selected, jobs],
   );
 
-  // A series is one folder, not one row per episode; movies stay single rows.
   const groups = useMemo(() => {
     const map = new Map<string, DownloadGroup>();
     for (const job of jobs) {
@@ -204,22 +194,6 @@ export function DownloadsScreen() {
     });
   };
 
-  const confirmDeleteGroup = (group: DownloadGroup) =>
-    Alert.alert(
-      "Delete the whole folder?",
-      `All ${group.jobs.length} downloaded episodes of “${group.title}” will be removed from this device.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete all",
-          style: "destructive",
-          onPress: () => {
-            for (const job of group.jobs) void downloadManager.delete(job.id);
-          },
-        },
-      ],
-    );
-
   const playOffline = (job: DownloadJob) => {
     const p = resumeFor(job.subjectId, job.season || null, job.episode || null);
     navigation.navigate("Player", {
@@ -231,18 +205,20 @@ export function DownloadsScreen() {
       season: job.season,
       episode: job.episode,
       resumeAt: p && !p.completed ? p.position_seconds : 0,
-      sources: [{
-        url: offlineUri(job),
-        resolution: "Offline",
-        qualityValue: null,
-        format: "MP4",
-        codec: job.source.codec,
-        sizeBytes: job.totalBytes,
-        durationSeconds: null,
-        sourceLabel: "Offline",
-        preview: false,
-        verifiedFullLength: true,
-      }],
+      sources: [
+        {
+          url: offlineUri(job),
+          resolution: "Offline",
+          qualityValue: null,
+          format: "MP4",
+          codec: job.source.codec,
+          sizeBytes: job.totalBytes,
+          durationSeconds: null,
+          sourceLabel: "Offline",
+          preview: false,
+          verifiedFullLength: true,
+        },
+      ],
     });
   };
 
@@ -250,12 +226,18 @@ export function DownloadsScreen() {
     const posterW = Math.round(stage.posterWidth * (compact ? 0.34 : 0.52));
     const posterH = Math.round(posterW * 1.5);
     const pct = job.totalBytes && job.totalBytes > 0 ? Math.min(100, (job.receivedBytes / job.totalBytes) * 100) : null;
-    const isActive = job.state === "downloading" || job.state === "connecting" || job.state === "queued" || job.state === "verifying" || job.state === "resolving";
+    const isActive =
+      job.state === "downloading" ||
+      job.state === "connecting" ||
+      job.state === "queued" ||
+      job.state === "verifying" ||
+      job.state === "resolving";
     const speed = job.state === "downloading" ? speeds.get(job.id) : undefined;
     const speedLabel = speed
       ? ` · ${formatBytes(speed.bytesPerSec)}/s${speed.etaSeconds ? ` · ${Math.max(1, Math.round(speed.etaSeconds / 60))} min left` : ""}`
       : "";
     const checked = selected.has(job.id);
+
     return (
       <Pressable
         key={job.id}
@@ -265,53 +247,76 @@ export function DownloadsScreen() {
         accessibilityState={selecting ? { checked } : undefined}
       >
         {selecting ? (
-          checked ? <CheckCircle2 size={20} color={palette.accent} /> : <Circle size={20} color={palette.textMuted} />
+          checked ? <CheckCircle2 size={20} color={palette.accentBright} /> : <Circle size={20} color={palette.textMuted} />
         ) : null}
+
         {compact ? null : (
           <Poster
             uri={job.posterUrl}
-            style={[styles.poster, { width: posterW, height: posterH, borderRadius: stage.focusRing * 3 }]}
+            style={[styles.poster, { width: posterW, height: posterH, borderRadius: radius.sm }]}
             initials={initialsFor(job.title)}
           />
         )}
+
         <View style={{ flex: 1, gap: 4 }}>
-          <Text numberOfLines={1} style={[styles.jobTitle, { fontSize: stage.cardTitleSize + 2 }]}>{job.title}</Text>
+          <Text numberOfLines={1} style={[styles.jobTitle, { fontSize: stage.cardTitleSize + 2 }]}>
+            {job.title}
+          </Text>
+
           <Text style={[styles.jobMeta, { fontSize: stage.metaSize }]}>
             {[
               job.mediaType === "series" && job.season ? `S${job.season} · E${job.episode}` : "Movie",
               STATE_LABEL[job.state] ?? job.state,
               job.source.resolution,
-              job.totalBytes ? `${(job.receivedBytes / 1_048_576).toFixed(0)} / ${(job.totalBytes / 1_048_576).toFixed(0)} MB` : `${(job.receivedBytes / 1_048_576).toFixed(0)} MB`,
-            ].filter(Boolean).join(" · ")}
+              job.totalBytes
+                ? `${(job.receivedBytes / 1_048_576).toFixed(0)} / ${(job.totalBytes / 1_048_576).toFixed(0)} MB`
+                : `${(job.receivedBytes / 1_048_576).toFixed(0)} MB`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </Text>
+
           {speedLabel ? <Text style={styles.speedLabel}>{speedLabel}</Text> : null}
+
           {(job.state === "failed" || job.state === "waiting_for_network") && job.failureReason ? (
             <Text style={styles.failReason}>{job.failureReason}</Text>
           ) : null}
+
           {isActive || job.state === "paused" ? (
             <View style={styles.barTrack}>
-              <View style={[styles.bar, { width: pct !== null ? `${pct}%` : "12%", opacity: pct !== null ? 1 : 0.5 }]} />
+              <View style={[styles.bar, { width: pct !== null ? `${pct}%` : "12%", opacity: pct !== null ? 1 : 0.5 }]}>
+                <LinearGradient
+                  colors={gradients.accent}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={StyleSheet.absoluteFillObject}
+                />
+              </View>
             </View>
           ) : null}
+
           <View style={styles.jobActions}>
             {job.state === "queued" && !selecting ? (
               <Pressable style={styles.chipAction} onPress={() => downloadManager.moveToFront(job.id)}>
-                <ArrowDownToLine size={13} color={palette.accent} />
-                <Text style={[styles.chipLabel, { color: palette.accent }]}>Download next</Text>
+                <ArrowDownToLine size={13} color={palette.accentBright} />
+                <Text style={[styles.chipLabel, { color: palette.accentBright }]}>Download next</Text>
               </Pressable>
             ) : null}
+
             {job.state === "completed" && !selecting ? (
               <Pressable style={styles.chipAction} onPress={() => playOffline(job)}>
                 <PlayIcon size={13} color={palette.success} />
                 <Text style={[styles.chipLabel, { color: palette.success }]}>Play offline</Text>
               </Pressable>
             ) : null}
+
             {job.state === "downloading" && job.engine !== "native" && !selecting ? (
               <Pressable style={styles.chipAction} onPress={() => downloadManager.pause(job.id)}>
                 <Pause size={13} color={palette.warning} />
                 <Text style={[styles.chipLabel, { color: palette.warning }]}>Pause</Text>
               </Pressable>
             ) : null}
+
             {job.state === "paused" || job.state === "failed" || job.state === "cancelled" ? (
               !selecting ? (
                 <Pressable style={styles.chipAction} onPress={() => downloadManager.resume(job.id)}>
@@ -320,30 +325,33 @@ export function DownloadsScreen() {
                 </Pressable>
               ) : null
             ) : null}
+
             {!selecting ? (
               <Pressable style={styles.chipAction} onPress={() => confirmDelete(job)}>
                 <Trash2 size={13} color={palette.danger} />
                 <Text style={[styles.chipLabel, { color: palette.danger }]}>Delete</Text>
               </Pressable>
             ) : null}
-            {job.state === "completed" && !selecting ? <CheckCircle2 size={13} color={palette.success} style={{ marginLeft: "auto" }} /> : null}
+
+            {job.state === "completed" && !selecting ? (
+              <CheckCircle2 size={13} color={palette.success} style={{ marginLeft: "auto" }} />
+            ) : null}
           </View>
         </View>
       </Pressable>
     );
   };
 
-  /** A show folder: a small poster collage, episode count, and its own progress. */
   const renderFolder = (group: DownloadGroup) => {
     const posterW = Math.round(stage.posterWidth * 0.62);
     const posterH = Math.round(posterW * 1.5);
-    const total = group.jobs.reduce((sum, job) => sum + (job.totalBytes ?? job.receivedBytes), 0);
     const received = group.jobs.reduce((sum, job) => sum + job.receivedBytes, 0);
     const ready = group.jobs.filter((job) => job.state === "completed").length;
     const open = expanded.has(group.key);
     const checked = group.jobs.every((job) => selected.has(job.id));
+
     return (
-      <View key={group.key}>
+      <View key={group.key} style={{ marginBottom: spacing.md }}>
         <Pressable
           style={[styles.job, { padding: stage.cardGap, marginHorizontal: stage.gutter }]}
           onPress={() => {
@@ -358,171 +366,137 @@ export function DownloadsScreen() {
               return next;
             });
           }}
-          accessibilityRole="button"
-          accessibilityState={selecting ? { checked } : undefined}
-          accessibilityLabel={`${group.title}, ${group.jobs.length} episodes`}
         >
           {selecting ? (
-            checked ? <CheckCircle2 size={20} color={palette.accent} /> : <Circle size={20} color={palette.textMuted} />
+            checked ? <CheckCircle2 size={20} color={palette.accentBright} /> : <Circle size={20} color={palette.textMuted} />
           ) : null}
-          <View style={{ width: posterW + 14, height: posterH + 10 }}>
-            {group.jobs.slice(0, 3).map((job, index) => (
-              <Poster
-                key={job.id}
-                uri={job.posterUrl}
-                style={[
-                  styles.collagePoster,
-                  {
-                    width: posterW,
-                    height: posterH,
-                    left: index * 7,
-                    top: index * 5,
-                    zIndex: 3 - index,
-                    borderRadius: stage.focusRing * 3,
-                  },
-                ]}
-                initials={initialsFor(group.title)}
-              />
-            ))}
+
+          <View style={{ width: posterW, height: posterH, position: "relative" }}>
+            <Poster
+              uri={group.posterUrl}
+              style={[styles.poster, { width: posterW, height: posterH, borderRadius: radius.sm }]}
+              initials={initialsFor(group.title)}
+            />
             <View style={styles.folderBadge}>
               <Text style={styles.folderBadgeText}>{group.jobs.length}</Text>
             </View>
           </View>
+
           <View style={{ flex: 1, gap: 4 }}>
             <Text numberOfLines={1} style={[styles.jobTitle, { fontSize: stage.cardTitleSize + 2 }]}>
               {group.title}
             </Text>
             <Text style={[styles.jobMeta, { fontSize: stage.metaSize }]}>
-              {`${group.jobs.length} episode${group.jobs.length === 1 ? "" : "s"} · ${ready} ready · ${formatBytes(total)}`}
+              {`${group.jobs.length} episode${group.jobs.length === 1 ? "" : "s"} · ${ready} ready · ${(received / 1_048_576).toFixed(0)} MB`}
             </Text>
-            <View style={styles.barTrack}>
-              <View style={[styles.bar, { width: `${total > 0 ? Math.min(100, (received / total) * 100) : 0}%` }]} />
-            </View>
+
             <View style={styles.jobActions}>
-              <View style={styles.chipAction}>
-                <Text style={styles.chipLabel}>{open ? "Hide episodes" : "Open folder"}</Text>
-              </View>
-              {!selecting ? (
-                <Pressable style={styles.chipAction} onPress={() => confirmDeleteGroup(group)}>
-                  <Trash2 size={13} color={palette.danger} />
-                  <Text style={[styles.chipLabel, { color: palette.danger }]}>Delete all</Text>
-                </Pressable>
-              ) : null}
+              <Text style={[styles.chipLabel, { color: palette.accentBright }]}>
+                {open ? "Hide episodes" : "Show episodes"}
+              </Text>
+              {open ? <ChevronUp size={14} color={palette.accentBright} /> : <ChevronDown size={14} color={palette.accentBright} />}
             </View>
           </View>
         </Pressable>
-        {open ? group.jobs.map((job) => renderJob(job, true)) : null}
+
+        {open ? (
+          <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
+            {group.jobs.map((job) => renderJob(job, true))}
+          </View>
+        ) : null}
       </View>
     );
   };
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top + stage.cardGap }]}>
-      <View style={[styles.titleRow, { paddingHorizontal: stage.gutter, gap: stage.cardGap }]}>
-        {navigation.canGoBack() ? (
-          <Pressable
-            onPress={() => navigation.goBack()}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-            style={{
-              width: stage.controlSize,
-              height: stage.controlSize,
-              borderRadius: stage.controlSize / 2,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: "rgba(255,255,255,0.05)",
-            }}
-          >
-            <ChevronLeft size={22} color={palette.textPrimary} />
-          </Pressable>
-        ) : null}
-        <Text style={[styles.title, { fontSize: stage.titleSize, flex: 1 }]}>Downloads</Text>
+    <View style={[styles.root, { paddingTop: insets.top + spacing.xs }]}>
+      <AmbientGlow />
+
+      {/* Header */}
+      <View style={[styles.titleRow, { paddingHorizontal: stage.gutter }]}>
+        <Text style={styles.title}>Downloads</Text>
         {jobs.length > 0 ? (
           <Pressable
             style={styles.selectToggle}
             onPress={() => (selecting ? exitSelectMode() : setSelecting(true))}
-            accessibilityRole="button"
           >
-            <ListChecks size={15} color={selecting ? palette.accent : palette.textSecondary} />
-            <Text style={[styles.selectToggleLabel, selecting && { color: palette.accent }]}>
-              {selecting ? "Done" : "Select"}
-            </Text>
+            <ListChecks size={16} color={palette.textSecondary} />
+            <Text style={styles.selectToggleLabel}>{selecting ? "Done" : "Select"}</Text>
           </Pressable>
         ) : null}
       </View>
-      <Text style={[styles.subtitle, { paddingHorizontal: stage.gutter, fontSize: Math.max(12, stage.metaSize + 1) }]}>
-        Files live in this app's private storage on this device and play without a network.
+
+      <Text style={[styles.subtitle, { paddingHorizontal: stage.gutter }]}>
+        Watch saved episodes and films with zero data usage or buffering.
       </Text>
 
-      {selecting ? (
+      {/* Storage Meter Glass Card */}
+      {jobs.length > 0 ? (
+        <View style={[styles.meter, { marginHorizontal: stage.gutter }]}>
+          <View style={styles.meterHead}>
+            <HardDrive size={16} color={palette.accentBright} />
+            <Text style={styles.meterTitle}>Device Storage</Text>
+            <Text style={styles.meterValue}>
+              {freeBytes !== null ? `${formatBytes(usedBytes)} used · ${formatBytes(freeBytes)} free` : `${formatBytes(usedBytes)} used`}
+            </Text>
+          </View>
+
+          <View style={styles.meterTrack}>
+            <View
+              style={[
+                styles.meterFill,
+                {
+                  width:
+                    freeBytes !== null && freeBytes > 0
+                      ? `${Math.min(100, Math.max(1, (usedBytes / (usedBytes + freeBytes)) * 100))}%`
+                      : "6%",
+                  opacity: usedBytes > 0 ? 1 : 0.35,
+                },
+              ]}
+            >
+              <LinearGradient
+                colors={gradients.accent}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={StyleSheet.absoluteFillObject}
+              />
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {/* Batch Actions Bar */}
+      {selecting && selected.size > 0 ? (
         <View style={[styles.batchBar, { marginHorizontal: stage.gutter }]}>
-          <Text style={styles.batchCount}>{selected.size} selected</Text>
+          <Text style={styles.batchCount}>{`${selected.size} selected`}</Text>
           <View style={styles.batchActions}>
-            {activeSelected.length > 0 ? (
-              <Pressable
-                style={styles.batchBtn}
-                onPress={() => {
-                  for (const id of activeSelected) downloadManager.cancel(id);
-                  exitSelectMode();
-                }}
-              >
-                <XCircle size={14} color={palette.warning} />
-                <Text style={[styles.batchBtnLabel, { color: palette.warning }]}>Cancel</Text>
-              </Pressable>
-            ) : null}
             {removableSelected.length > 0 ? (
               <Pressable style={styles.batchBtn} onPress={confirmDeleteSelected}>
                 <Trash2 size={14} color={palette.danger} />
                 <Text style={[styles.batchBtnLabel, { color: palette.danger }]}>Delete</Text>
               </Pressable>
             ) : null}
-            {activeSelected.length > 0 && removableSelected.length === 0 ? (
-              <Text style={styles.batchHint}>Cancelling stops the transfer and removes its partial file.</Text>
-            ) : null}
           </View>
         </View>
       ) : null}
 
-      {jobs.length > 0 ? (
-        <View style={[styles.meter, { marginHorizontal: stage.gutter }]}>
-          <View style={styles.meterHead}>
-            <HardDrive size={15} color={palette.accentBright} />
-            <Text style={styles.meterTitle}>Offline vault</Text>
-            <Text style={styles.meterValue}>
-              {formatBytes(usedBytes)}
-              {freeBytes !== null ? ` · ${formatBytes(freeBytes)} free` : ""}
-            </Text>
-          </View>
-          <View style={styles.meterTrack}>
-            <View
-              style={[
-                styles.meterFill,
-                {
-                  width: freeBytes !== null && freeBytes > 0 ? `${Math.min(100, Math.max(1, (usedBytes / (usedBytes + freeBytes)) * 100))}%` : "6%",
-                  opacity: usedBytes > 0 ? 1 : 0.35,
-                },
-              ]}
-            />
-          </View>
-        </View>
-      ) : null}
       {jobs.length === 0 ? (
         <EmptyState
           title="No downloads yet"
           message="Open any title and tap the download icon to save it for offline viewing."
         />
       ) : (
-        <ScrollView contentContainerStyle={{ paddingBottom: stage.gutter * 2 }}>
+        <ScrollView contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
           {groups.map((group) => {
             const first = group.jobs[0];
             if (!first) return null;
             return group.mediaType === "series" && group.jobs.length > 1 ? renderFolder(group) : renderJob(first);
           })}
-          <View style={styles.storageNote}>
+
+          <View style={[styles.storageNote, { paddingHorizontal: stage.gutter }]}>
             <AlertTriangle size={13} color={palette.textMuted} />
             <Text style={styles.storageNoteText}>
-              Transfer progress reflects real bytes received. Interrupted downloads restart safely; nothing is marked
-              complete until the file is verified.
+              Offline downloads are verified and stored locally on your device storage.
             </Text>
           </View>
         </ScrollView>
@@ -537,67 +511,74 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
   },
-  title: { ...typeScale.title, color: palette.textPrimary },
-  selectToggle: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 6, paddingHorizontal: 8 },
-  selectToggleLabel: { color: palette.textSecondary, fontSize: 13, fontWeight: "700" },
-  subtitle: { ...typeScale.caption, color: palette.textMuted, paddingHorizontal: spacing.xl, marginTop: spacing.xs, marginBottom: spacing.lg, lineHeight: 19 },
+  title: { color: "#FFFFFF", fontWeight: "800", fontSize: 24, letterSpacing: -0.6 },
+  selectToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
+  },
+  selectToggleLabel: { color: palette.textPrimary, fontSize: 13, fontWeight: "600" },
+  subtitle: { color: palette.textMuted, fontSize: 13, marginBottom: spacing.md },
   batchBar: {
-    marginHorizontal: spacing.xl,
-    marginBottom: spacing.lg,
-    backgroundColor: "rgba(240,120,85,0.08)",
-    borderColor: palette.glassStroke,
+    marginBottom: spacing.md,
+    backgroundColor: "rgba(255, 94, 58, 0.12)",
+    borderColor: palette.accentBright,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.card,
     padding: spacing.md,
-    gap: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
-  batchCount: { ...typeScale.micro, color: palette.accent },
-  batchActions: { flexDirection: "row", alignItems: "center", gap: spacing.lg, flexWrap: "wrap" },
+  batchCount: { color: palette.accentBright, fontSize: 13, fontWeight: "700" },
+  batchActions: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
   batchBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
   batchBtnLabel: { fontSize: 13, fontWeight: "700" },
-  batchHint: { color: palette.textMuted, fontSize: 11, flex: 1, minWidth: 160 },
   meter: {
-    marginHorizontal: spacing.xl,
     marginBottom: spacing.lg,
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
+    backgroundColor: palette.surfaceGlass,
+    borderColor: palette.glassStrokeBright,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.card,
     padding: spacing.lg,
     gap: spacing.sm,
   },
   meterHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  meterTitle: { ...typeScale.headline, color: palette.textPrimary, flex: 1 },
+  meterTitle: { color: "#FFFFFF", fontSize: 14, fontWeight: "700", flex: 1 },
   meterValue: { color: palette.textSecondary, fontSize: 12, fontWeight: "600", fontVariant: ["tabular-nums"] },
-  meterTrack: { height: 8, borderRadius: 4, backgroundColor: palette.surfaceRaised, overflow: "hidden" },
-  meterFill: { height: 8, borderRadius: 4, backgroundColor: palette.accent },
+  meterTrack: { height: 6, borderRadius: 3, backgroundColor: "rgba(255, 255, 255, 0.12)", overflow: "hidden" },
+  meterFill: { height: 6, borderRadius: 3, overflow: "hidden" },
   job: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    backgroundColor: palette.glassFill,
+    backgroundColor: palette.surfaceGlass,
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.card,
     padding: spacing.md,
-    marginHorizontal: spacing.xl,
     marginBottom: spacing.md,
   },
   poster: { width: 64, height: 96, borderRadius: radius.sm },
-  jobTitle: { ...typeScale.headline, color: palette.textPrimary },
+  jobTitle: { color: "#FFFFFF", fontWeight: "700" },
   jobMeta: { color: palette.textMuted, fontSize: 12 },
   speedLabel: { color: palette.textSecondary, fontSize: 11, fontVariant: ["tabular-nums"] },
   failReason: { color: palette.danger, fontSize: 12 },
-  barTrack: { height: 4, borderRadius: 2, backgroundColor: palette.surfaceRaised, overflow: "hidden", marginTop: 2 },
-  bar: { height: 4, backgroundColor: palette.accent, borderRadius: 2 },
+  barTrack: { height: 4, borderRadius: 2, backgroundColor: "rgba(255, 255, 255, 0.12)", overflow: "hidden", marginTop: 4 },
+  bar: { height: 4, borderRadius: 2, overflow: "hidden" },
   jobActions: { flexDirection: "row", gap: spacing.md, marginTop: spacing.xs, flexWrap: "wrap", alignItems: "center" },
   chipAction: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4 },
   chipLabel: { fontSize: 12, fontWeight: "700", color: palette.textPrimary },
-  storageNote: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.xl, paddingTop: spacing.md, alignItems: "flex-start" },
+  storageNote: { flexDirection: "row", gap: spacing.sm, paddingTop: spacing.md, alignItems: "flex-start" },
   storageNoteText: { color: palette.textMuted, fontSize: 11, flex: 1, lineHeight: 16 },
-  collagePoster: { position: "absolute", borderColor: palette.glassStroke, borderWidth: StyleSheet.hairlineWidth },
   folderBadge: {
     position: "absolute",
     right: -4,
@@ -611,6 +592,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 5,
   },
-  folderBadgeText: { color: "#160B08", fontSize: 11, fontWeight: "800" },
-  episodeRow: { marginLeft: spacing.xxl },
+  folderBadgeText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" },
+  episodeRow: { marginLeft: spacing.xl },
 });

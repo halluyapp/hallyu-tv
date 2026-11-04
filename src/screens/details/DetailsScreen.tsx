@@ -1,9 +1,10 @@
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/States";
+import { AmbientGlow } from "@/components/ui/AmbientGlow";
 import { Poster, initialsFor } from "@/components/ui/Poster";
 import { SkeletonFill } from "@/components/ui/PosterCard";
 import { useStage } from "@/hooks/useStage";
-import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { palette, radius, spacing, gradients } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
 import { selectDownloadSource } from "@/services/provider/streams";
@@ -18,11 +19,23 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Bookmark, BookmarkCheck, ChevronDown, Download, Play, Monitor, ChevronRight, Volume2, VolumeX } from "lucide-react-native";
+import {
+  Bookmark,
+  BookmarkCheck,
+  ChevronDown,
+  Download,
+  Play,
+  Monitor,
+  ChevronRight,
+  Volume2,
+  VolumeX,
+  Star,
+  Film,
+  Tv,
+} from "lucide-react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/** The following episode within the season, else episode 1 of the next season. */
 function nextEpisodeFor(detail: TitleDetail, season: number, episode: number): { season: number; episode: number } | null {
   if (detail.mediaType !== "series") return null;
   const current = detail.seasons.find((s) => s.season === season);
@@ -67,8 +80,6 @@ export function DetailsScreen() {
     void load();
   }, [load]);
 
-  // Once detail + local library are ready, resume the latest watched episode
-  // (or the first episode) without overwriting later user selections.
   useEffect(() => {
     if (!detail || libraryLoading || initializedRef.current) return;
     initializedRef.current = true;
@@ -174,7 +185,6 @@ export function DetailsScreen() {
     });
   }, [detail, toggleWatchlist, saved, playTone]);
 
-  // Spoken synopsis — on-device TTS (expo-speech); leaving the screen stops it.
   const toggleSpeaking = useCallback(() => {
     if (speaking) {
       Speech.stop();
@@ -183,7 +193,13 @@ export function DetailsScreen() {
       return;
     }
     if (!detail?.description) return;
-    Speech.speak(detail.description, { rate: 1.0, pitch: 1.0, onDone: () => setSpeaking(false), onStopped: () => setSpeaking(false), onError: () => setSpeaking(false) });
+    Speech.speak(detail.description, {
+      rate: 1.0,
+      pitch: 1.0,
+      onDone: () => setSpeaking(false),
+      onStopped: () => setSpeaking(false),
+      onError: () => setSpeaking(false),
+    });
     setSpeaking(true);
     playTone("confirm");
   }, [speaking, detail, playTone]);
@@ -206,215 +222,331 @@ export function DetailsScreen() {
 
   const synopsis = detail.description ?? "No synopsis was provided for this title.";
   const episodes = season ? Array.from({ length: season.maxEp }, (_, i) => i + 1) : [];
+  const isSeries = detail.mediaType === "series";
 
   return (
-    <Animated.ScrollView
-      style={styles.root}
-      contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xxl }}
-      onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
-      scrollEventThrottle={16}
-    >
-      <View style={[styles.heroWrap, { height: stage.heroHeight }]}>
-        <Animated.View
-          style={[
-            StyleSheet.absoluteFill,
-            {
-              transform: [
-                {
-                  scale: scrollY.interpolate({
-                    inputRange: [-120, 0, stage.heroHeight],
-                    outputRange: [1.24, 1.06, 1],
-                    extrapolate: "clamp",
-                  }),
-                },
-                {
-                  translateY: scrollY.interpolate({
-                    inputRange: [0, stage.heroHeight],
-                    outputRange: [0, stage.heroHeight * 0.32],
-                    extrapolate: "clamp",
-                  }),
-                },
-              ],
-            },
-          ]}
-        >
-          {detail.backdropUrl ?? detail.posterUrl ? (
-            <Poster uri={detail.backdropUrl ?? detail.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(detail.title)} />
-          ) : null}
-        </Animated.View>
-        <LinearGradient
-          colors={["rgba(8,10,13,0.28)", "rgba(8,10,13,0.62)", "rgba(8,10,13,1)"]}
-          locations={[0, 0.55, 1]}
-          style={StyleSheet.absoluteFill}
-        />
-        <Pressable style={[styles.backBtn, { top: insets.top + spacing.sm }]} onPress={() => navigation.goBack()} hitSlop={8}>
-          <ChevronDown size={22} color={palette.textPrimary} />
-        </Pressable>
-      </View>
+    <View style={styles.root}>
+      <AmbientGlow />
 
-      <View style={[styles.body, { paddingHorizontal: stage.gutter, paddingTop: stage.cardGap }]}>
-        <Text style={[styles.title, { fontSize: stage.titleSize }]}>{detail.title}</Text>
-        <Text style={[styles.meta, { fontSize: stage.metaSize }]}>
-          {[
-            detail.releaseDate?.slice(0, 4),
-            detail.mediaType === "series" ? "Series" : "Movie",
-            detail.country,
-            detail.rating ? `IMDb ${detail.rating}` : null,
-          ].filter(Boolean).join(" · ")}
-        </Text>
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+        scrollEventThrottle={16}
+      >
+        {/* Giant Cinematic Backdrop */}
+        <View style={[styles.heroWrap, { height: stage.heroHeight }]}>
+          <Animated.View
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                transform: [
+                  {
+                    scale: scrollY.interpolate({
+                      inputRange: [-120, 0, stage.heroHeight],
+                      outputRange: [1.25, 1.05, 1],
+                      extrapolate: "clamp",
+                    }),
+                  },
+                  {
+                    translateY: scrollY.interpolate({
+                      inputRange: [0, stage.heroHeight],
+                      outputRange: [0, stage.heroHeight * 0.35],
+                      extrapolate: "clamp",
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            {detail.backdropUrl ?? detail.posterUrl ? (
+              <Poster uri={detail.backdropUrl ?? detail.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(detail.title)} />
+            ) : null}
+          </Animated.View>
 
-        <View style={styles.actionsRow}>
-          <Button
-            label={resolving ? "Preparing…" : resume && !resume.completed ? "Resume" : "Play"}
-            icon={<Play size={16} color="#1A0E0A" fill="#1A0E0A" />}
-            loading={resolving}
-            onPress={() => void play({ resumeAt: resume && !resume.completed ? resume.position_seconds : 0 })}
-            style={{ flex: 1 }}
+          {/* Ambient Cinema Scrim */}
+          <LinearGradient
+            colors={["rgba(4, 6, 10, 0.2)", "rgba(4, 6, 10, 0.65)", "#04060A"]}
+            locations={[0, 0.5, 1]}
+            style={StyleSheet.absoluteFill}
           />
+
+          {/* Liquid Glass Back Button */}
           <Pressable
-            style={[styles.iconAction, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
-            onPress={onWatchlist}
+            style={[styles.backBtn, { top: insets.top + spacing.sm }]}
+            onPress={() => navigation.goBack()}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
           >
-            {saved ? <BookmarkCheck size={20} color={palette.accent} /> : <Bookmark size={20} color={palette.textSecondary} />}
-          </Pressable>
-          <Pressable
-            style={[styles.iconAction, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
-            onPress={() => void startDownload({})}
-            disabled={resolving}
-          >
-            <Download size={20} color={palette.textSecondary} />
+            <ChevronDown size={22} color="#FFFFFF" />
           </Pressable>
         </View>
 
-        {resolutionError ? <Text style={styles.errorNote}>{resolutionError}</Text> : null}
+        <View style={[styles.body, { paddingHorizontal: stage.gutter }]}>
+          {/* Title & Metadata Badges */}
+          <Text style={[styles.title, { fontSize: stage.titleSize }]}>{detail.title}</Text>
 
-        {detail.genre ? (
-          <View style={styles.chips}>
-            {detail.genre.split(",").slice(0, 4).map((g) => (
-              <View key={g} style={styles.chip}>
-                <Text style={styles.chipText}>{g.trim()}</Text>
+          <View style={styles.badgeRow}>
+            {detail.releaseDate ? (
+              <View style={styles.glassBadge}>
+                <Text style={styles.badgeText}>{detail.releaseDate.slice(0, 4)}</Text>
               </View>
-            ))}
-          </View>
-        ) : null}
-
-        <Pressable onPress={() => setExpanded((e) => !e)}>
-          <Text numberOfLines={expanded ? undefined : 3} style={styles.synopsis}>{synopsis}</Text>
-          <Text style={styles.expandHint}>{expanded ? "Show less" : "More"}</Text>
-        </Pressable>
-
-        {detail.description ? (
-          <Pressable style={styles.listenBtn} onPress={toggleSpeaking} accessibilityRole="button" accessibilityLabel={speaking ? "Stop reading the synopsis" : "Read the synopsis aloud"}>
-            {speaking ? <VolumeX size={15} color={palette.accent} /> : <Volume2 size={15} color={palette.textSecondary} />}
-            <Text style={[styles.listenLabel, speaking && { color: palette.accent }]}>{speaking ? "Stop reading" : "Listen"}</Text>
-          </Pressable>
-        ) : null}
-
-        {detail.mediaType === "series" && detail.seasons.length > 0 ? (
-          <View style={{ marginTop: spacing.xl }}>
-            <Text style={[styles.sectionTitle, { fontSize: stage.railTitleSize }]}>Episodes</Text>
-            {detail.seasons.length > 1 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.md }}>
-                {detail.seasons.map((s) => (
-                  <Pressable
-                    key={s.season}
-                    style={[styles.seasonChip, season?.season === s.season && styles.seasonChipActive]}
-                    onPress={() => {
-                      setSeason(s);
-                      setEpisode(1);
-                    }}
-                  >
-                    <Text style={[styles.seasonChipText, season?.season === s.season && styles.seasonChipTextActive]}>
-                      Season {s.season}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
             ) : null}
-            <View style={{ gap: spacing.sm }}>
-              {episodes.map((ep) => {
-                const p = resumeFor(detail.subjectId, season!.season, ep);
-                const watched = p ? p.completed || p.position_seconds / Math.max(p.duration_seconds, 1) > 0.9 : false;
-                return (
-                  <Pressable
-                    key={ep}
-                    style={[styles.episodeRow, { padding: stage.cardGap }, episode === ep && styles.episodeRowActive]}
-                    onPress={() => {
-                      setEpisode(ep);
-                      void play({ resumeAt: p && !p.completed ? p.position_seconds : 0, season: season?.season ?? null, episode: ep });
-                    }}
-                  >
-                    <View style={styles.episodeNumber}>
-                      <Text style={styles.episodeNumberText}>{ep}</Text>
-                    </View>
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={styles.episodeTitle} numberOfLines={1}>{`Episode ${ep}`}</Text>
-                      <Text style={styles.episodeMeta}>
-                        {watched ? "Watched" : p ? `Watching · ${Math.floor(p.position_seconds / 60)} min in` : "Ready to play"}
-                      </Text>
-                    </View>
-                    <ChevronRight size={16} color={palette.textMuted} />
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        ) : null}
 
-        {detail.cast.length > 0 ? (
-          <View style={{ marginTop: spacing.xl }}>
-            <Text style={[styles.sectionTitle, { fontSize: stage.railTitleSize }]}>Cast</Text>
-            <View style={styles.castRow}>
-              {detail.cast.slice(0, 6).map((s) => (
-                <View key={s.name} style={styles.castItem}>
-                  <Poster
-                    uri={s.avatarUrl}
-                    style={[styles.castAvatar, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
-                    initials={initialsFor(s.name)}
-                  />
-                  <Text numberOfLines={1} style={styles.castName}>{s.name}</Text>
-                  {s.character ? <Text numberOfLines={1} style={styles.castRole}>{s.character}</Text> : null}
+            <View style={styles.glassBadge}>
+              {isSeries ? <Tv size={11} color={palette.textSecondary} /> : <Film size={11} color={palette.textSecondary} />}
+              <Text style={styles.badgeText}>{isSeries ? "Series" : "Movie"}</Text>
+            </View>
+
+            {detail.rating ? (
+              <View style={styles.glassBadge}>
+                <Star size={11} color="#FBBF24" fill="#FBBF24" />
+                <Text style={[styles.badgeText, { color: "#FFFFFF", fontWeight: "700" }]}>{detail.rating}</Text>
+              </View>
+            ) : null}
+
+            {detail.country ? (
+              <View style={styles.glassBadge}>
+                <Text style={styles.badgeText}>{detail.country}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Primary Action Row */}
+          <View style={styles.actionsRow}>
+            <Button
+              label={resolving ? "Preparing..." : resume && !resume.completed ? "Resume" : "Play Now"}
+              icon={<Play size={18} color="#FFFFFF" fill="#FFFFFF" />}
+              loading={resolving}
+              onPress={() => void play({ resumeAt: resume && !resume.completed ? resume.position_seconds : 0 })}
+              style={{ flex: 1 }}
+              size="lg"
+            />
+
+            <Pressable
+              style={[styles.iconAction, saved && styles.iconActionActive]}
+              onPress={onWatchlist}
+              hitSlop={8}
+            >
+              {saved ? (
+                <BookmarkCheck size={20} color={palette.accentBright} />
+              ) : (
+                <Bookmark size={20} color={palette.textSecondary} />
+              )}
+            </Pressable>
+
+            <Pressable
+              style={styles.iconAction}
+              onPress={() => void startDownload({})}
+              disabled={resolving}
+              hitSlop={8}
+            >
+              <Download size={20} color={palette.textSecondary} />
+            </Pressable>
+          </View>
+
+          {resolutionError ? <Text style={styles.errorNote}>{resolutionError}</Text> : null}
+
+          {/* Genre Chips */}
+          {detail.genre ? (
+            <View style={styles.chips}>
+              {detail.genre.split(",").slice(0, 5).map((g) => (
+                <View key={g} style={styles.chip}>
+                  <Text style={styles.chipText}>{g.trim()}</Text>
                 </View>
               ))}
             </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        <View style={[styles.deviceHint, { marginTop: spacing.xl }]}>
-          <Monitor size={14} color={palette.textMuted} />
-          <Text style={styles.deviceHintText}>Progress, watchlist and downloads are stored on this device.</Text>
+          {/* Synopsis with Glass Container */}
+          <View style={styles.synopsisCard}>
+            <Pressable onPress={() => setExpanded((e) => !e)}>
+              <Text numberOfLines={expanded ? undefined : 3} style={styles.synopsis}>
+                {synopsis}
+              </Text>
+              <Text style={styles.expandHint}>{expanded ? "Show less" : "Read more"}</Text>
+            </Pressable>
+
+            {detail.description ? (
+              <Pressable
+                style={styles.listenBtn}
+                onPress={toggleSpeaking}
+                accessibilityRole="button"
+                accessibilityLabel={speaking ? "Stop reading" : "Listen to synopsis"}
+              >
+                {speaking ? <VolumeX size={15} color={palette.accent} /> : <Volume2 size={15} color={palette.textSecondary} />}
+                <Text style={[styles.listenLabel, speaking && { color: palette.accent }]}>
+                  {speaking ? "Stop voice" : "Audio synopsis"}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {/* Episodes Section for Series */}
+          {isSeries && detail.seasons.length > 0 ? (
+            <View style={{ marginTop: spacing.xl }}>
+              <Text style={[styles.sectionTitle, { fontSize: stage.railTitleSize }]}>Episodes</Text>
+
+              {detail.seasons.length > 1 ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: spacing.md }}>
+                  {detail.seasons.map((s) => {
+                    const isActive = season?.season === s.season;
+                    return (
+                      <Pressable
+                        key={s.season}
+                        style={[styles.seasonChip, isActive && styles.seasonChipActive]}
+                        onPress={() => {
+                          setSeason(s);
+                          setEpisode(1);
+                        }}
+                      >
+                        {isActive && (
+                          <LinearGradient
+                            colors={gradients.accent}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={StyleSheet.absoluteFillObject}
+                          />
+                        )}
+                        <Text style={[styles.seasonChipText, isActive && styles.seasonChipTextActive]}>
+                          Season {s.season}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              ) : null}
+
+              <View style={{ gap: spacing.sm }}>
+                {episodes.map((ep) => {
+                  const p = resumeFor(detail.subjectId, season!.season, ep);
+                  const watched = p ? p.completed || p.position_seconds / Math.max(p.duration_seconds, 1) > 0.9 : false;
+                  const isCurrent = episode === ep;
+
+                  return (
+                    <Pressable
+                      key={ep}
+                      style={[styles.episodeRow, isCurrent && styles.episodeRowActive]}
+                      onPress={() => {
+                        setEpisode(ep);
+                        void play({ resumeAt: p && !p.completed ? p.position_seconds : 0, season: season?.season ?? null, episode: ep });
+                      }}
+                    >
+                      <View style={[styles.episodeNumber, isCurrent && styles.episodeNumberActive]}>
+                        <Text style={[styles.episodeNumberText, isCurrent && { color: "#FFFFFF" }]}>{ep}</Text>
+                      </View>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={styles.episodeTitle} numberOfLines={1}>{`Episode ${ep}`}</Text>
+                        <Text style={styles.episodeMeta}>
+                          {watched ? "Completed" : p ? `${Math.floor(p.position_seconds / 60)}m watched` : "Available to stream"}
+                        </Text>
+                      </View>
+                      <ChevronRight size={18} color={isCurrent ? palette.accentBright : palette.textMuted} />
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Cast */}
+          {detail.cast.length > 0 ? (
+            <View style={{ marginTop: spacing.xl }}>
+              <Text style={[styles.sectionTitle, { fontSize: stage.railTitleSize }]}>Cast</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.md, paddingTop: spacing.sm }}>
+                {detail.cast.slice(0, 8).map((c) => (
+                  <View key={c.name} style={styles.castItem}>
+                    <Poster
+                      uri={c.avatarUrl}
+                      style={styles.castAvatar}
+                      initials={initialsFor(c.name)}
+                    />
+                    <Text numberOfLines={1} style={styles.castName}>{c.name}</Text>
+                    {c.character ? <Text numberOfLines={1} style={styles.castRole}>{c.character}</Text> : null}
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          <View style={[styles.deviceHint, { marginTop: spacing.xxl }]}>
+            <Monitor size={14} color={palette.textMuted} />
+            <Text style={styles.deviceHintText}>Offline downloads and resume state are synchronized locally on this device.</Text>
+          </View>
         </View>
-      </View>
-    </Animated.ScrollView>
+      </Animated.ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
-  heroWrap: { height: 300, backgroundColor: palette.surface },
+  heroWrap: { position: "relative", backgroundColor: palette.surface },
   backBtn: {
     position: "absolute",
     left: spacing.lg,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "rgba(8,10,13,0.6)",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(14, 20, 30, 0.75)",
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  body: { paddingTop: spacing.md },
+  title: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    letterSpacing: -0.8,
+  },
+  badgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: spacing.sm,
+    flexWrap: "wrap",
+  },
+  glassBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+  },
+  badgeText: {
+    color: palette.textSecondary,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  actionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginTop: spacing.xl,
+  },
+  iconAction: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
-  body: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg },
-  title: { ...typeScale.display, color: palette.textPrimary },
-  meta: { ...typeScale.caption, color: palette.textSecondary, marginTop: spacing.xs },
-  actionsRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, marginTop: spacing.lg },
-  iconAction: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: palette.glassFill,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.glassStroke,
-    alignItems: "center",
-    justifyContent: "center",
+  iconActionActive: {
+    borderColor: palette.accentBright,
+    backgroundColor: "rgba(255, 94, 58, 0.16)",
   },
   errorNote: { color: palette.danger, fontSize: 13, marginTop: spacing.md },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.lg },
@@ -427,62 +559,128 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   chipText: { color: palette.textSecondary, fontSize: 12, fontWeight: "600" },
-  synopsis: { ...typeScale.body, color: palette.textPrimary, lineHeight: 23, marginTop: spacing.lg },
+  synopsisCard: {
+    marginTop: spacing.lg,
+    padding: spacing.lg,
+    backgroundColor: palette.surfaceGlass,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.card,
+  },
+  synopsis: {
+    color: palette.textSecondary,
+    fontSize: 14,
+    lineHeight: 22,
+  },
   expandHint: { color: palette.accent, fontSize: 13, fontWeight: "700", marginTop: spacing.xs },
   listenBtn: {
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     marginTop: spacing.md,
   },
-  listenLabel: { color: palette.textSecondary, fontSize: 12, fontWeight: "700" },
-  sectionTitle: { ...typeScale.headline, color: palette.textPrimary, marginBottom: spacing.md },
+  listenLabel: { color: palette.textSecondary, fontSize: 12, fontWeight: "600" },
+  sectionTitle: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    letterSpacing: -0.3,
+    marginBottom: spacing.sm,
+  },
   seasonChip: {
-    backgroundColor: palette.glassFill,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.pill,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    marginRight: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginRight: 8,
+    overflow: "hidden",
+    position: "relative",
   },
-  seasonChipActive: { backgroundColor: palette.accent, borderColor: palette.accent },
+  seasonChipActive: {
+    borderColor: palette.accentBright,
+  },
   seasonChipText: { color: palette.textSecondary, fontSize: 13, fontWeight: "600" },
-  seasonChipTextActive: { color: "#1A0E0A" },
+  seasonChipTextActive: { color: "#FFFFFF", fontWeight: "700" },
   episodeRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    backgroundColor: palette.glassFill,
+    padding: spacing.md,
+    backgroundColor: palette.surfaceGlass,
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.md,
-    padding: spacing.md,
+    gap: spacing.md,
   },
-  episodeRowActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.08)" },
+  episodeRowActive: {
+    borderColor: palette.accentBright,
+    backgroundColor: palette.glassFillStrong,
+  },
   episodeNumber: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: palette.surfaceRaised,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
-  episodeNumberText: { color: palette.textPrimary, fontWeight: "700", fontSize: 14 },
-  episodeTitle: { color: palette.textPrimary, fontWeight: "600", fontSize: 14 },
-  episodeMeta: { color: palette.textMuted, fontSize: 12 },
-  castRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.lg },
-  castItem: { width: 72, gap: 6, alignItems: "center" },
-  castAvatar: { width: 60, height: 60, borderRadius: 30 },
-  castName: { color: palette.textPrimary, fontSize: 11, fontWeight: "600", textAlign: "center" },
-  castRole: { color: palette.textMuted, fontSize: 10, textAlign: "center" },
-  deviceHint: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  deviceHintText: { color: palette.textMuted, fontSize: 12, flex: 1 },
+  episodeNumberActive: {
+    backgroundColor: palette.accent,
+  },
+  episodeNumberText: {
+    color: palette.textSecondary,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  episodeTitle: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  episodeMeta: {
+    color: palette.textMuted,
+    fontSize: 12,
+  },
+  castItem: {
+    width: 72,
+    alignItems: "center",
+  },
+  castAvatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    marginBottom: 6,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: 1,
+  },
+  castName: {
+    color: palette.textPrimary,
+    fontSize: 11,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  castRole: {
+    color: palette.textMuted,
+    fontSize: 10,
+    textAlign: "center",
+  },
+  deviceHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    justifyContent: "center",
+  },
+  deviceHintText: {
+    color: palette.textMuted,
+    fontSize: 12,
+  },
 });

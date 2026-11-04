@@ -1,17 +1,23 @@
 import type { Stage } from "@/design-system/stage";
-import { palette } from "@/design-system/tokens";
-import { ChevronLeft, Crop, Gauge, Lock, Pause, PictureInPicture2, Play, RotateCcw, RotateCw, SkipForward, Subtitles, Wifi } from "lucide-react-native";
+import { palette, radius, gradients } from "@/design-system/tokens";
+import { glowShadow } from "@/design-system/depth";
+import { LinearGradient } from "expo-linear-gradient";
+import {
+  ChevronLeft,
+  Crop,
+  Gauge,
+  Lock,
+  Pause,
+  PictureInPicture2,
+  Play,
+  RotateCcw,
+  RotateCw,
+  SkipForward,
+  Subtitles,
+  Wifi,
+} from "lucide-react-native";
 import React, { useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
-
-/**
- * Player chrome — a glass slab that rises into the frame.
- *
- * Every target is measured from the stage, so a 42dp phone button becomes a
- * 100px+ remote target on a television. Focus is drawn as an overlay rim
- * (opacity only) so nothing reflows when the d-pad moves, and the chrome tells
- * the screen whether anything is focused so it never disappears mid-navigation.
- */
 
 function fmt(t: number): string {
   if (!Number.isFinite(t) || t < 0) t = 0;
@@ -59,7 +65,6 @@ export function PlayerControls(props: PlayerControlsProps) {
   const scrubRef = useRef({ value: 0 });
   const focusCount = useRef(0);
 
-  // While scrubbing, ignore incoming position updates and seek once, on release.
   const shown = scrub ?? Math.min(position, duration || position);
   const total = duration > 0 ? duration : 0;
   const pct = total > 0 ? Math.min(1, shown / total) : 0;
@@ -124,19 +129,18 @@ export function PlayerControls(props: PlayerControlsProps) {
     props.onFocusChange?.(focusCount.current > 0);
   };
 
-  /** A focus rim drawn on top of a control: opacity only, no layout movement. */
   const rim = (id: string) => (
     <View
       pointerEvents="none"
       style={{
         position: "absolute",
-        top: -3,
-        left: -3,
-        right: -3,
-        bottom: -3,
-        borderRadius: 999,
+        top: -4,
+        left: -4,
+        right: -4,
+        bottom: -4,
+        borderRadius: radius.pill,
         borderWidth: stage.focusRing,
-        borderColor: palette.accent,
+        borderColor: palette.accentBright,
         opacity: focused === id ? 1 : 0,
       }}
     />
@@ -146,12 +150,20 @@ export function PlayerControls(props: PlayerControlsProps) {
   const metaSize = Math.max(11, Math.round(stage.metaSize * 1.1));
   const pillSize = Math.max(12, Math.round(stage.bodySize * 0.95));
   const pillPad = {
-    paddingHorizontal: stage.tier === "compact" ? 11 : 14,
-    paddingVertical: stage.tier === "compact" ? 7 : 9,
+    paddingHorizontal: stage.tier === "compact" ? 12 : 16,
+    paddingVertical: stage.tier === "compact" ? 8 : 10,
   };
 
   return (
     <View style={styles.chrome} pointerEvents="box-none">
+      {/* Top Scrim */}
+      <LinearGradient
+        colors={["rgba(4, 6, 10, 0.85)", "rgba(4, 6, 10, 0.4)", "transparent"]}
+        locations={[0, 0.6, 1]}
+        style={styles.topScrim}
+        pointerEvents="none"
+      />
+
       {/* Top bar */}
       <View style={[styles.topBar, { paddingHorizontal: stage.gutter, paddingTop: stage.gutter }]}>
         <Pressable
@@ -165,9 +177,10 @@ export function PlayerControls(props: PlayerControlsProps) {
           accessibilityLabel="Back"
         >
           {rim("back")}
-          <ChevronLeft size={Math.round(stage.u * 3.8)} color={palette.textPrimary} />
+          <ChevronLeft size={Math.round(stage.u * 3.8)} color="#FFFFFF" />
         </Pressable>
-        <View style={{ flex: 1 }}>
+
+        <View style={{ flex: 1, paddingHorizontal: 4 }}>
           <Text numberOfLines={1} style={[styles.titleText, { fontSize: titleSize }]}>
             {props.title}
           </Text>
@@ -175,6 +188,7 @@ export function PlayerControls(props: PlayerControlsProps) {
             <Text style={[styles.episodeText, { fontSize: metaSize }]}>{props.episodeLabel}</Text>
           ) : null}
         </View>
+
         <Pressable
           onPress={props.onLock}
           onFocus={() => handleFocus("lock")}
@@ -185,10 +199,11 @@ export function PlayerControls(props: PlayerControlsProps) {
           accessibilityLabel="Lock controls"
         >
           {rim("lock")}
-          <Lock size={Math.round(stage.u * 3)} color={palette.textSecondary} />
+          <Lock size={Math.round(stage.u * 2.8)} color={palette.textSecondary} />
         </Pressable>
-        <View style={[styles.transportPill, { paddingHorizontal: stage.tier === "compact" ? 9 : 12 }]}>
-          {props.transportLabel === "Offline" ? null : <Wifi size={11} color={palette.textMuted} />}
+
+        <View style={[styles.transportPill, { paddingHorizontal: stage.tier === "compact" ? 10 : 14 }]}>
+          {props.transportLabel === "Offline" ? null : <Wifi size={11} color={palette.accentBright} />}
           <Text style={[styles.transportText, { fontSize: metaSize }]}>{props.transportLabel}</Text>
         </View>
       </View>
@@ -204,9 +219,10 @@ export function PlayerControls(props: PlayerControlsProps) {
           accessibilityLabel="Back 10 seconds"
         >
           {rim("back10")}
-          <RotateCcw size={Math.round(stage.u * 5)} color={palette.textPrimary} />
+          <RotateCcw size={Math.round(stage.u * 4.8)} color="#FFFFFF" />
           <Text style={[styles.skipLabel, { fontSize: metaSize }]}>10</Text>
         </Pressable>
+
         <Pressable
           onPress={props.onTogglePlay}
           onFocus={() => handleFocus("play")}
@@ -216,12 +232,19 @@ export function PlayerControls(props: PlayerControlsProps) {
           accessibilityLabel={isPlaying ? "Pause" : "Play"}
         >
           {rim("play")}
+          <LinearGradient
+            colors={gradients.accent}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFillObject}
+          />
           {isPlaying ? (
-            <Pause size={Math.round(stage.u * 6.4)} color="#160B08" fill="#160B08" />
+            <Pause size={Math.round(stage.u * 6.2)} color="#FFFFFF" fill="#FFFFFF" />
           ) : (
-            <Play size={Math.round(stage.u * 6.4)} color="#160B08" fill="#160B08" style={{ marginLeft: 4 }} />
+            <Play size={Math.round(stage.u * 6.2)} color="#FFFFFF" fill="#FFFFFF" style={{ marginLeft: 4 }} />
           )}
         </Pressable>
+
         <Pressable
           onPress={() => props.onSkip(10)}
           onFocus={() => handleFocus("fwd10")}
@@ -231,26 +254,46 @@ export function PlayerControls(props: PlayerControlsProps) {
           accessibilityLabel="Forward 10 seconds"
         >
           {rim("fwd10")}
-          <RotateCw size={Math.round(stage.u * 5)} color={palette.textPrimary} />
+          <RotateCw size={Math.round(stage.u * 4.8)} color="#FFFFFF" />
           <Text style={[styles.skipLabel, { fontSize: metaSize }]}>10</Text>
         </Pressable>
       </View>
 
+      {/* Bottom Scrim */}
+      <LinearGradient
+        colors={["transparent", "rgba(4, 6, 10, 0.4)", "rgba(4, 6, 10, 0.92)"]}
+        locations={[0, 0.4, 1]}
+        style={styles.bottomScrim}
+        pointerEvents="none"
+      />
+
       {/* Bottom: seek + actions */}
-      <View style={[styles.bottomStack, { paddingHorizontal: stage.gutter, paddingBottom: stage.gutter }]}>
-        <View style={[styles.seekRow, { gap: stage.tier === "compact" ? 8 : 12 }]}>
-          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 7.5) }]}>{fmt(shown)}</Text>
+      <View style={[styles.bottomStack, { paddingHorizontal: stage.gutter, paddingBottom: stage.gutter + 4 }]}>
+        <View style={[styles.seekRow, { gap: stage.tier === "compact" ? 10 : 14 }]}>
+          <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 7.5) }]}>
+            {fmt(shown)}
+          </Text>
+
           <View style={styles.trackHit} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)} {...pan.panHandlers}>
             <View style={styles.track}>
               <View style={[styles.trackBuffered, { width: `${bufferedPct * 100}%` }]} />
-              <View style={[styles.trackElapsed, { width: `${pct * 100}%` }]} />
+              <View style={[styles.trackElapsed, { width: `${pct * 100}%` }]}>
+                <LinearGradient
+                  colors={gradients.accent}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={StyleSheet.absoluteFillObject}
+                />
+              </View>
               <View style={[styles.thumb, { left: `${pct * 100}%` }]} />
             </View>
           </View>
+
           <Text style={[styles.timeLabel, { fontSize: metaSize, minWidth: Math.round(stage.u * 7.5) }]}>
             {total > 0 ? fmt(total) : "--:--"}
           </Text>
         </View>
+
         <View style={[styles.actionsRow, { gap: stage.cardGap }]}>
           <Pressable
             onPress={props.onSpeed}
@@ -261,10 +304,11 @@ export function PlayerControls(props: PlayerControlsProps) {
             accessibilityLabel="Playback speed"
           >
             {rim("speed")}
-            <Text style={[styles.pillText, { fontSize: pillSize }, props.rate !== 1 && { color: palette.accent }]}>
+            <Text style={[styles.pillText, { fontSize: pillSize }, props.rate !== 1 && { color: palette.accentBright }]}>
               {props.rate === 1 ? "1×" : `${props.rate}×`}
             </Text>
           </Pressable>
+
           <Pressable
             onPress={props.onSubtitles}
             onFocus={() => handleFocus("subs")}
@@ -274,11 +318,12 @@ export function PlayerControls(props: PlayerControlsProps) {
             accessibilityLabel="Subtitles and audio"
           >
             {rim("subs")}
-            <Subtitles size={Math.round(stage.u * 2.6)} color={props.subtitleLabel ? palette.accent : palette.textSecondary} />
-            <Text style={[styles.pillText, { fontSize: pillSize }, props.subtitleLabel && { color: palette.accent }]}>
+            <Subtitles size={Math.round(stage.u * 2.6)} color={props.subtitleLabel ? palette.accentBright : palette.textSecondary} />
+            <Text style={[styles.pillText, { fontSize: pillSize }, props.subtitleLabel && { color: palette.accentBright }]}>
               {props.subtitleLabel ?? "Subtitles"}
             </Text>
           </Pressable>
+
           <Pressable
             onPress={props.onQuality}
             onFocus={() => handleFocus("quality")}
@@ -291,6 +336,7 @@ export function PlayerControls(props: PlayerControlsProps) {
             <Gauge size={Math.round(stage.u * 2.6)} color={palette.textSecondary} />
             <Text style={[styles.pillText, { fontSize: pillSize }]}>{props.quality ?? "Auto"}</Text>
           </Pressable>
+
           <Pressable
             onPress={props.onToggleFit}
             onFocus={() => handleFocus("fit")}
@@ -300,11 +346,12 @@ export function PlayerControls(props: PlayerControlsProps) {
             accessibilityLabel={props.fitMode === "cover" ? "Switch to fit screen" : "Crop to fill screen"}
           >
             {rim("fit")}
-            <Crop size={Math.round(stage.u * 2.6)} color={props.fitMode === "cover" ? palette.accent : palette.textSecondary} />
-            <Text style={[styles.pillText, { fontSize: pillSize }, props.fitMode === "cover" && { color: palette.accent }]}>
-              {props.fitMode === "cover" ? "Filled" : "Fit"}
+            <Crop size={Math.round(stage.u * 2.6)} color={props.fitMode === "cover" ? palette.accentBright : palette.textSecondary} />
+            <Text style={[styles.pillText, { fontSize: pillSize }, props.fitMode === "cover" && { color: palette.accentBright }]}>
+              {props.fitMode === "cover" ? "Fill" : "Fit"}
             </Text>
           </Pressable>
+
           {props.pipAvailable ? (
             <Pressable
               onPress={props.onPictureInPicture}
@@ -319,18 +366,19 @@ export function PlayerControls(props: PlayerControlsProps) {
               <Text style={[styles.pillText, { fontSize: pillSize }]}>PiP</Text>
             </Pressable>
           ) : null}
+
           {props.hasNextEpisode ? (
             <Pressable
               onPress={props.onNextEpisode}
               onFocus={() => handleFocus("next")}
               onBlur={handleBlur}
-              style={[styles.pill, pillPad]}
+              style={[styles.pill, pillPad, { borderColor: palette.accent }]}
               accessibilityRole="button"
               accessibilityLabel="Next episode"
             >
               {rim("next")}
-              <SkipForward size={Math.round(stage.u * 2.6)} color={palette.accent} />
-              <Text style={[styles.pillText, { fontSize: pillSize, color: palette.accent }]}>Next episode</Text>
+              <SkipForward size={Math.round(stage.u * 2.6)} color={palette.accentBright} />
+              <Text style={[styles.pillText, { fontSize: pillSize, color: palette.accentBright }]}>Next episode</Text>
             </Pressable>
           ) : null}
         </View>
@@ -341,76 +389,117 @@ export function PlayerControls(props: PlayerControlsProps) {
 
 const styles = StyleSheet.create({
   chrome: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between" },
-  topBar: { flexDirection: "row", alignItems: "center", gap: 12 },
+  topScrim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 140,
+  },
+  bottomScrim: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 180,
+  },
+  topBar: { flexDirection: "row", alignItems: "center", gap: 12, zIndex: 1 },
   circleBtn: {
-    backgroundColor: "rgba(10,12,16,0.62)",
+    backgroundColor: palette.glassFillStrong,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(235,242,248,0.14)",
+    borderColor: palette.glassStrokeBright,
     alignItems: "center",
     justifyContent: "center",
   },
-  titleText: { color: palette.textPrimary, fontWeight: "700" },
-  episodeText: { color: palette.textMuted, marginTop: 1 },
+  titleText: { color: "#FFFFFF", fontWeight: "700" },
+  episodeText: { color: palette.textSecondary, marginTop: 2 },
   transportPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    backgroundColor: "rgba(10,12,16,0.62)",
-    borderRadius: 999,
-    paddingHorizontal: 10,
+    gap: 6,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
     paddingVertical: 5,
   },
-  transportText: { color: palette.textMuted, fontWeight: "600" },
-  centerRow: { ...StyleSheet.absoluteFillObject, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 36 },
-  skipBtn: { alignItems: "center", justifyContent: "center", padding: 12, borderRadius: 16 },
-  skipLabel: { color: palette.textPrimary, fontWeight: "800", marginTop: -3 },
-  playBtn: {
-    backgroundColor: palette.accent,
+  transportText: { color: palette.textSecondary, fontWeight: "600" },
+  centerRow: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: palette.accent,
-    shadowOpacity: 0.5,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
+    gap: 40,
   },
-  bottomStack: { gap: 12 },
-  seekRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  trackHit: { flex: 1, paddingVertical: 12 },
+  skipBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  skipLabel: { color: "#FFFFFF", fontWeight: "800", marginTop: -2 },
+  playBtn: {
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    borderColor: "rgba(255, 255, 255, 0.3)",
+    borderWidth: 1,
+    ...glowShadow(palette.accent, 22),
+  },
+  bottomStack: { gap: 14, zIndex: 1 },
+  seekRow: { flexDirection: "row", alignItems: "center" },
+  trackHit: { flex: 1, paddingVertical: 14 },
   track: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(244,242,237,0.22)",
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "rgba(255, 255, 255, 0.16)",
     overflow: "visible",
     justifyContent: "center",
   },
-  trackBuffered: { position: "absolute", left: 0, height: 4, borderRadius: 2, backgroundColor: "rgba(244,242,237,0.35)" },
-  trackElapsed: { position: "absolute", left: 0, height: 4, borderRadius: 2, backgroundColor: palette.accent },
+  trackBuffered: {
+    position: "absolute",
+    left: 0,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "rgba(255, 255, 255, 0.28)",
+  },
+  trackElapsed: {
+    position: "absolute",
+    left: 0,
+    height: 5,
+    borderRadius: 2.5,
+    overflow: "hidden",
+  },
   thumb: {
     position: "absolute",
     top: "50%",
-    marginTop: -7,
-    marginLeft: -7,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: palette.accent,
-    shadowColor: "#000",
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
+    marginTop: -8,
+    marginLeft: -8,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#FFFFFF",
+    borderColor: palette.accent,
+    borderWidth: 2,
+    shadowColor: palette.accent,
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
     elevation: 4,
   },
-  timeLabel: { color: palette.textPrimary, fontVariant: ["tabular-nums"], textAlign: "center" },
+  timeLabel: { color: palette.textPrimary, fontVariant: ["tabular-nums"], textAlign: "center", fontWeight: "600" },
   actionsRow: { flexDirection: "row", justifyContent: "center", flexWrap: "wrap" },
   pill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(10,12,16,0.62)",
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    gap: 7,
+    backgroundColor: palette.glassFillStrong,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
   },
-  pillText: { color: palette.textPrimary, fontWeight: "700" },
+  pillText: { color: palette.textPrimary, fontWeight: "600" },
 });

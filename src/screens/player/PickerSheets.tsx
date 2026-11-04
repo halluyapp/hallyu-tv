@@ -1,4 +1,4 @@
-import { palette, radius, spacing, typeScale } from "@/design-system/tokens";
+import { palette, radius, spacing } from "@/design-system/tokens";
 import { useStage } from "@/hooks/useStage";
 import { CaptionTrack, StreamSource } from "@/types/provider";
 import type { AudioTrack, SubtitleTrack } from "expo-video";
@@ -7,8 +7,6 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import Slider from "@react-native-community/slider";
 
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
-
-/** Bottom sheets for quality and subtitle selection (shared visual system). */
 
 export function PickerSheet({
   title,
@@ -26,8 +24,8 @@ export function PickerSheet({
         style={[styles.sheet, { padding: stage.gutter, maxHeight: stage.tier === "stage" ? "70%" : "80%" }]}
         onPress={(e) => e.stopPropagation?.()}
       >
-        <View style={[styles.grabber, { width: Math.max(40, stage.controlSize * 0.5) }]} />
-        <Text style={[styles.sheetTitle, { fontSize: Math.max(20, stage.titleSize * 0.7) }]}>{title}</Text>
+        <View style={styles.grabber} />
+        <Text style={[styles.sheetTitle, { fontSize: Math.max(18, stage.titleSize * 0.7) }]}>{title}</Text>
         <ScrollView style={styles.sheetScroll} contentContainerStyle={{ gap: spacing.sm }} showsVerticalScrollIndicator={false}>
           {children}
         </ScrollView>
@@ -48,21 +46,30 @@ export function QualityOptions({
   const stage = useStage();
   return (
     <>
-      {sources.map((s) => (
-        <Pressable
-          key={s.url}
-          style={[styles.option, s.url === activeUri && styles.optionActive]}
-          onPress={() => onPick(s)}
-        >
-          <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{s.resolution ?? s.format}</Text>
-          <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>
-            {[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format]
-              .filter(Boolean)
-              .join(" · ")}
-          </Text>
-        </Pressable>
-      ))}
-      {sources.length === 0 ? <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>No full-length sources for this title.</Text> : null}
+      {sources.map((s) => {
+        const isActive = s.url === activeUri;
+        return (
+          <Pressable
+            key={s.url}
+            style={[styles.option, isActive && styles.optionActive]}
+            onPress={() => onPick(s)}
+          >
+            <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>
+              {s.resolution ?? s.format}
+            </Text>
+            <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>
+              {[s.codec?.toUpperCase(), s.sizeBytes ? `${(s.sizeBytes / 1_048_576).toFixed(0)} MB` : null, s.format]
+                .filter(Boolean)
+                .join(" · ")}
+            </Text>
+          </Pressable>
+        );
+      })}
+      {sources.length === 0 ? (
+        <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>
+          No full-length sources for this title.
+        </Text>
+      ) : null}
     </>
   );
 }
@@ -104,15 +111,18 @@ export function SubtitleOptions({
           <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Loading subtitle tracks…</Text>
         </View>
       ) : null}
-      {(tracks ?? []).map((t) => (
-        <Pressable
-          key={t.id}
-          style={[styles.option, activeId === t.id && styles.optionActive]}
-          onPress={() => onPick(t)}
-        >
-          <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.languageName}</Text>
-        </Pressable>
-      ))}
+      {(tracks ?? []).map((t) => {
+        const isActive = activeId === t.id;
+        return (
+          <Pressable
+            key={t.id}
+            style={[styles.option, isActive && styles.optionActive]}
+            onPress={() => onPick(t)}
+          >
+            <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.languageName}</Text>
+          </Pressable>
+        );
+      })}
       {activeId !== null ? (
         <View style={{ marginTop: spacing.md }}>
           <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Subtitle delay: {offset.toFixed(1)}s</Text>
@@ -123,8 +133,8 @@ export function SubtitleOptions({
             step={0.5}
             value={offset}
             minimumTrackTintColor={palette.accent}
-            maximumTrackTintColor="rgba(244,242,237,0.25)"
-            thumbTintColor={palette.accent}
+            maximumTrackTintColor="rgba(255,255,255,0.2)"
+            thumbTintColor={palette.accentBright}
             onValueChange={onOffset}
           />
           <View style={styles.sizeRow}>
@@ -150,47 +160,44 @@ export function SubtitleOptions({
           <Text style={styles.errorText}>{error}</Text>
           {onRetry ? (
             <Pressable style={styles.option} onPress={onRetry}>
-              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>Retry</Text>
+              <Text style={styles.optionTitle}>Retry loading subtitles</Text>
             </Pressable>
           ) : null}
         </View>
-      ) : null}
-      {!loading && tracks !== null && tracks.length === 0 && !error ? (
-        <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>No caption tracks were returned for this title.</Text>
       ) : null}
     </>
   );
 }
 
-/** Playback speed choices shown in the speed sheet. */
 export function SpeedOptions({
   activeRate,
   onPick,
 }: {
   activeRate: number;
-  onPick: (rate: number) => void;
+  onPick: (r: number) => void;
 }) {
   const stage = useStage();
   return (
     <>
-      {PLAYBACK_RATES.map((rate) => (
-        <Pressable
-          key={rate}
-          style={[styles.option, rate === activeRate && styles.optionActive]}
-          onPress={() => onPick(rate)}
-        >
-          <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{rate === 1 ? "Normal" : `${rate}×`}</Text>
-          {rate === 1 ? <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Default</Text> : null}
-        </Pressable>
-      ))}
+      {PLAYBACK_RATES.map((rate) => {
+        const isActive = rate === activeRate;
+        return (
+          <Pressable
+            key={rate}
+            style={[styles.option, isActive && styles.optionActive]}
+            onPress={() => onPick(rate)}
+          >
+            <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>
+              {rate === 1 ? "Normal speed (1.0×)" : `${rate}×`}
+            </Text>
+            {rate === 1 ? <Text style={[styles.optionMeta, { fontSize: Math.max(11, stage.metaSize) }]}>Default</Text> : null}
+          </Pressable>
+        );
+      })}
     </>
   );
 }
 
-/**
- * Audio + subtitle tracks embedded in the stream itself (expo-video native
- * selection). Hidden when the current source has none.
- */
 export function NativeTracksOptions({
   audioTracks,
   subtitleTracks,
@@ -212,14 +219,16 @@ export function NativeTracksOptions({
     <>
       {audioTracks.length > 1 ? (
         <View style={{ gap: spacing.sm }}>
-          <Text style={styles.groupLabel}>Audio</Text>
+          <Text style={styles.groupLabel}>Audio stream</Text>
           {audioTracks.map((t) => (
             <Pressable
               key={t.id}
               style={[styles.option, t.id === activeAudioId && styles.optionActive]}
               onPress={() => onPickAudio(t)}
             >
-              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.label || t.language || "Audio"}</Text>
+              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>
+                {t.label || t.language || "Audio"}
+              </Text>
             </Pressable>
           ))}
         </View>
@@ -239,7 +248,9 @@ export function NativeTracksOptions({
               style={[styles.option, t.id === activeSubtitleId && styles.optionActive]}
               onPress={() => onPickSubtitle(t)}
             >
-              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>{t.label || t.language || "Subtitles"}</Text>
+              <Text style={[styles.optionTitle, { fontSize: Math.max(14, stage.bodySize) }]}>
+                {t.label || t.language || "Subtitles"}
+              </Text>
             </Pressable>
           ))}
         </View>
@@ -249,24 +260,37 @@ export function NativeTracksOptions({
 }
 
 const styles = StyleSheet.create({
-  groupLabel: { ...typeScale.micro, color: palette.textSecondary, marginTop: spacing.sm },
-  sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: palette.scrim, justifyContent: "flex-end" },
+  groupLabel: { color: palette.textSecondary, fontSize: 12, fontWeight: "600", marginTop: spacing.sm },
+  sheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0, 0, 0, 0.72)", justifyContent: "flex-end" },
   sheet: {
-    backgroundColor: palette.backgroundElevated,
+    backgroundColor: "rgba(12, 16, 26, 0.96)",
     borderTopLeftRadius: radius.sheet,
     borderTopRightRadius: radius.sheet,
-    borderColor: palette.glassStroke,
+    borderColor: palette.glassStrokeBright,
     borderTopWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
     padding: spacing.xl,
     gap: spacing.sm,
     maxHeight: "75%",
+    shadowColor: "#000",
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+    elevation: 12,
   },
   sheetScroll: { flexGrow: 0 },
-  grabber: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: palette.glassStroke, marginBottom: spacing.xs },
-  sheetTitle: { ...typeScale.title, color: palette.textPrimary, marginBottom: spacing.sm },
+  grabber: {
+    alignSelf: "center",
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    marginBottom: spacing.xs,
+  },
+  sheetTitle: { color: "#FFFFFF", fontWeight: "800", letterSpacing: -0.4, marginBottom: spacing.sm },
   option: {
     borderRadius: radius.md,
-    backgroundColor: palette.glassFill,
+    backgroundColor: palette.glassFillStrong,
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.lg,
@@ -274,21 +298,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  optionActive: { borderColor: palette.accent, backgroundColor: "rgba(240,120,85,0.10)" },
+  optionActive: {
+    borderColor: palette.accentBright,
+    backgroundColor: "rgba(255, 94, 58, 0.16)",
+  },
   sizeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.md },
   sizeChip: {
-    minWidth: 40,
-    height: 34,
+    minWidth: 42,
+    height: 36,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.sm,
-    backgroundColor: palette.glassFill,
+    backgroundColor: palette.glassFillStrong,
     borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
-  sizeChipText: { color: palette.textPrimary, fontWeight: "700" },
-  optionTitle: { color: palette.textPrimary, fontWeight: "700", fontSize: 15 },
+  sizeChipText: { color: "#FFFFFF", fontWeight: "700" },
+  optionTitle: { color: "#FFFFFF", fontWeight: "700", fontSize: 15 },
   optionMeta: { color: palette.textMuted, fontSize: 12 },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm },
   errorText: { color: palette.danger, fontSize: 12, lineHeight: 17 },
