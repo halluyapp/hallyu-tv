@@ -162,7 +162,7 @@ export function DetailsScreen() {
           expectedBytes: pick.sizeBytes,
         });
         if (Platform.isTV) navigation.navigate("TvDownloads");
-        else navigation.navigate("Main");
+        else navigation.navigate("Main", { screen: "Downloads" });
       } catch (err) {
         playTone("error");
         setResolutionError(err instanceof ProviderError ? err.message : "Could not start the download.");

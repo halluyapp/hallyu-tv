@@ -57,6 +57,7 @@ export function PlayerScreen() {
   const autoSubtitleRef = useRef(false);
   const subtitleOptOutRef = useRef(false);
   const pressZoneRef = useRef<"left" | "center" | "right">("center");
+  const gestureStartRef = useRef({ x: 0, position: 0 });
   const lastTapRef = useRef<{ at: number; zone: "left" | "center" | "right" } | null>(null);
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,6 +66,7 @@ export function PlayerScreen() {
   const [subtitleScale, setSubtitleScale] = useState(1);
   const [nextCountdown, setNextCountdown] = useState<number | null>(null);
   const [fitMode, setFitMode] = useState<"contain" | "cover">("contain");
+  const [cinemaMode, setCinemaMode] = useState(() => stage.remote);
   const [locked, setLocked] = useState(false);
   const [pipSupported] = useState(() => {
     try {
@@ -571,6 +573,7 @@ export function PlayerScreen() {
         onMoveShouldSetPanResponder: (_event, state) => Math.abs(state.dx) > 10 || Math.abs(state.dy) > 10,
         onPanResponderGrant: (event) => {
           const x = event.nativeEvent.pageX;
+          gestureStartRef.current = { x, position: positionRef.current };
           pressZoneRef.current = x < stage.width * 0.34 ? "left" : x > stage.width * 0.66 ? "right" : "center";
           holdRateRef.current = rateRef.current;
           longPressActiveRef.current = false;
@@ -593,6 +596,17 @@ export function PlayerScreen() {
             player.playbackRate = holdRateRef.current;
             setRate(holdRateRef.current);
             setGestureHint(null);
+            return;
+          }
+          if (Math.abs(state.dx) > 54 && Math.abs(state.dx) > Math.abs(state.dy) * 1.3) {
+            const seekBy = Math.round((state.dx / Math.max(stage.width, 1)) * Math.min(Math.max(duration, 90), 300));
+            const target = Math.max(0, Math.min(duration || Number.MAX_SAFE_INTEGER, gestureStartRef.current.position + seekBy));
+            player.currentTime = target;
+            positionRef.current = target;
+            setPosition(target);
+            setGestureHint(`${seekBy >= 0 ? "+" : "−"}${Math.abs(seekBy)} seconds`);
+            showControls();
+            setTimeout(() => setGestureHint(null), 900);
             return;
           }
           if (Math.abs(state.dx) > 12 || Math.abs(state.dy) > 12) return;
@@ -785,6 +799,10 @@ export function PlayerScreen() {
         />
       </View>
 
+      {cinemaMode && !pipActive ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.cinemaShade]} />
+      ) : null}
+
       {activeTrack && currentCue ? (
         <View
           style={[styles.subtitleOverlay, { bottom: controlsVisible ? stage.subtitleSize * 5.4 : stage.subtitleSize * 2.4 }]}
@@ -887,6 +905,8 @@ export function PlayerScreen() {
             hasNextEpisode={Boolean(nextEpisode)}
             fitMode={fitMode}
             pipAvailable={pipSupported}
+            cinemaMode={cinemaMode}
+            onToggleCinema={() => setCinemaMode((value) => !value)}
             stage={stage}
             onFocusChange={(focused) => {
               chromeFocusCount.current = focused ? 1 : 0;
@@ -991,6 +1011,7 @@ export function PlayerScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
+  cinemaShade: { backgroundColor: "rgba(0, 0, 0, 0.22)" },
   chromeWrap: { ...StyleSheet.absoluteFillObject },
   centerOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", gap: spacing.md },
   bufferLabel: { color: palette.textSecondary, fontSize: 13 },

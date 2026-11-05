@@ -9,7 +9,7 @@ import { useDisplayMode } from "@/state/DisplayModeContext";
 import { AmbientGlow } from "@/components/ui/AmbientGlow";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Check, ChevronLeft, Monitor, Smartphone, Tv } from "lucide-react-native";
+import { Check, ChevronLeft, ChevronRight, Monitor, Smartphone, Tv } from "lucide-react-native";
 import React, { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,7 +28,7 @@ export function TvSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { mode, setMode } = useDisplayMode();
   const { play } = useSound();
-  const [focused, setFocused] = useState<DisplayMode | "back" | null>(null);
+  const [focused, setFocused] = useState<DisplayMode | "back" | "pairing" | null>(null);
 
   const identity = useMemo(() => readDeviceIdentity(), []);
   const television = useMemo(() => detectTelevision(identity), [identity]);
@@ -65,7 +65,7 @@ export function TvSettingsScreen() {
         >
           <ChevronLeft size={Math.round(stage.u * 2.8)} color="#FFFFFF" />
         </Pressable>
-        <Text style={{ color: "#FFFFFF", fontSize: stage.railTitleSize, fontWeight: "800" }}>Display</Text>
+        <Text style={{ color: "#FFFFFF", fontSize: stage.railTitleSize, fontWeight: "800" }}>Settings</Text>
       </View>
 
       <ScrollView
@@ -77,7 +77,7 @@ export function TvSettingsScreen() {
           gap: stage.cardGap,
         }}
       >
-        <Text style={{ color: "#FFFFFF", fontSize: stage.titleSize, fontWeight: "800" }}>Screen Layout</Text>
+        <Text style={{ color: "#FFFFFF", fontSize: stage.titleSize, fontWeight: "800" }}>Device & Screen</Text>
         <Text
           style={{
             color: palette.textSecondary,
@@ -86,9 +86,44 @@ export function TvSettingsScreen() {
             maxWidth: Math.round(stage.width * 0.72),
           }}
         >
-          Changing this switches the entire UI immediately without reloading or losing state. Choose Auto to let
-          Hallyu TV adapt seamlessly to your hardware.
+          Manage device pairing, phone authentication, and display layout seamlessly.
         </Text>
+
+        {/* TV Pairing Action Card */}
+        <Pressable
+          onPress={() => {
+            play("tap");
+            navigation.navigate("TvPairing");
+          }}
+          onFocus={() => setFocused("pairing")}
+          onBlur={() => setFocused(null)}
+          accessibilityRole="button"
+          accessibilityLabel="Connect Phone to Android TV"
+          style={[
+            styles.optionCard,
+            {
+              minHeight: stage.controlSize,
+              padding: Math.round(stage.cardGap * 1.2),
+              borderRadius: radius.card,
+              borderColor: focused === "pairing" ? palette.accentBright : palette.glassStrokeBright,
+              backgroundColor: focused === "pairing" ? "rgba(255, 94, 58, 0.2)" : palette.surfaceGlass,
+              gap: stage.cardGap,
+              marginTop: stage.cardGap * 0.5,
+            },
+            focused === "pairing" && styles.focusedGlow,
+          ]}
+        >
+          <Smartphone size={Math.round(stage.u * 3.4)} color={palette.accentBright} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#FFFFFF", fontSize: stage.bodySize, fontWeight: "700" }}>
+              Connect Phone to Android TV
+            </Text>
+            <Text style={{ color: palette.textSecondary, fontSize: stage.metaSize, marginTop: 2 }}>
+              Generate a 6-digit PIN to link your mobile profile and sync Watchlist
+            </Text>
+          </View>
+          <ChevronRight size={Math.round(stage.u * 3)} color={palette.accentBright} />
+        </Pressable>
 
         <View
           style={[
@@ -112,6 +147,9 @@ export function TvSettingsScreen() {
         </View>
 
         <View style={{ marginTop: stage.rowGap * 0.5, gap: stage.cardGap }}>
+          <Text style={{ color: "#FFFFFF", fontSize: stage.railTitleSize, fontWeight: "700", marginBottom: 4 }}>
+            Screen Layout
+          </Text>
           {OPTIONS.map((option) => {
             const selected = mode === option.key;
             const lit = focused === option.key;

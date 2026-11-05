@@ -14,6 +14,7 @@ import {
   RotateCw,
   SkipForward,
   Subtitles,
+  Tv,
   Wifi,
 } from "lucide-react-native";
 import React, { useMemo, useRef, useState } from "react";
@@ -42,6 +43,8 @@ export interface PlayerControlsProps {
   hasNextEpisode: boolean;
   fitMode: "contain" | "cover";
   pipAvailable: boolean;
+  cinemaMode?: boolean;
+  onToggleCinema?: () => void;
   stage: Stage;
   onFocusChange?: (focused: boolean) => void;
   onTogglePlay: () => void;
@@ -201,6 +204,21 @@ export function PlayerControls(props: PlayerControlsProps) {
           {rim("lock")}
           <Lock size={Math.round(stage.u * 2.8)} color={palette.textSecondary} />
         </Pressable>
+
+        {props.onToggleCinema ? (
+          <Pressable
+            onPress={props.onToggleCinema}
+            onFocus={() => handleFocus("cinema")}
+            onBlur={handleBlur}
+            style={[styles.circleBtn, props.cinemaMode && styles.circleBtnActive, { width: stage.controlSize, height: stage.controlSize, borderRadius: stage.controlSize / 2 }]}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={props.cinemaMode ? "Turn cinema mode off" : "Turn cinema mode on"}
+          >
+            {rim("cinema")}
+            <Tv size={Math.round(stage.u * 2.8)} color={props.cinemaMode ? palette.accentBright : palette.textSecondary} />
+          </Pressable>
+        ) : null}
 
         <View style={[styles.transportPill, { paddingHorizontal: stage.tier === "compact" ? 10 : 14 }]}>
           {props.transportLabel === "Offline" ? null : <Wifi size={11} color={palette.accentBright} />}
@@ -404,8 +422,12 @@ const styles = StyleSheet.create({
     height: 180,
   },
   topBar: { flexDirection: "row", alignItems: "center", gap: 12, zIndex: 1 },
+  circleBtnActive: {
+    borderColor: palette.accentBright,
+    backgroundColor: "rgba(255, 94, 58, 0.22)",
+  },
   circleBtn: {
-    backgroundColor: palette.glassFillStrong,
+    backgroundColor: "rgba(18, 25, 36, 0.72)",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.glassStrokeBright,
     alignItems: "center",
@@ -496,7 +518,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
-    backgroundColor: palette.glassFillStrong,
+    backgroundColor: "rgba(18, 25, 36, 0.76)",
     borderColor: palette.glassStrokeBright,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.pill,

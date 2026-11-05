@@ -13,7 +13,7 @@ import { useLibrary, type LibraryTitle, type ProgressRow } from "@/state/Library
 import { ProviderError, type HomeSection } from "@/types/provider";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Download, Home as HomeIcon, MonitorSmartphone, Search } from "lucide-react-native";
+import { Download, Home as HomeIcon, MonitorSmartphone, Search, Smartphone } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 
@@ -75,6 +75,12 @@ export function TvHomeScreen() {
         label: "Downloads",
         icon: Download,
         onPress: () => navigation.navigate("TvDownloads"),
+      },
+      {
+        key: "pairing",
+        label: "Connect Phone",
+        icon: Smartphone,
+        onPress: () => navigation.navigate("TvPairing"),
       },
       {
         key: "settings",

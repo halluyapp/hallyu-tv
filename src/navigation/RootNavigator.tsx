@@ -8,12 +8,14 @@ import { PlayerScreen } from "@/screens/player/PlayerScreen";
 import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
 import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
 import { TvSettingsScreen } from "@/screens/tv/TvSettingsScreen";
+import { TvPairingScreen } from "@/screens/tv/TvPairingScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
 import { useSound } from "@/services/sound/SoundContext";
 import { useStage } from "@/hooks/useStage";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import type { NavigatorScreenParams } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,7 +24,7 @@ import type { StreamSource } from "@/types/provider";
 
 export type RootStackParamList = {
   Onboarding: undefined;
-  Main: undefined;
+  Main: NavigatorScreenParams<TabParamList> | undefined;
   Details: { detailPath: string; subjectId: string };
   Player: {
     subjectId: string;
@@ -41,6 +43,7 @@ export type RootStackParamList = {
   TvSearch: undefined;
   TvDownloads: undefined;
   TvSettings: undefined;
+  TvPairing: undefined;
 };
 
 export type TabParamList = {
@@ -134,6 +137,7 @@ export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
         <Stack.Screen name="TvSearch" component={TvSearchScreen} />
         <Stack.Screen name="TvDownloads" component={DownloadsScreen} />
         <Stack.Screen name="TvSettings" component={TvSettingsScreen} />
+        <Stack.Screen name="TvPairing" component={TvPairingScreen} />
         <Stack.Screen name="Details" component={DetailsScreen} />
         <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "all" }} />
       </Stack.Navigator>

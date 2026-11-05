@@ -3,6 +3,7 @@ import { RootNavigator } from "@/navigation/RootNavigator";
 import { LibraryProvider } from "@/state/LibraryContext";
 import { SoundProvider } from "@/services/sound/SoundContext";
 import { DisplayModeProvider } from "@/state/DisplayModeContext";
+import { AuthProvider } from "@/services/auth/AuthContext";
 import { hasCompletedOnboarding } from "@/utils/onboarding";
 import { DarkTheme, NavigationContainer } from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
@@ -73,7 +74,9 @@ export default function App() {
             <DisplayModeProvider>
               <SoundProvider>
                 <LibraryProvider>
-                  <RootNavigator showOnboarding={showOnboarding} />
+                  <AuthProvider>
+                    <RootNavigator showOnboarding={showOnboarding} />
+                  </AuthProvider>
                 </LibraryProvider>
               </SoundProvider>
             </DisplayModeProvider>
