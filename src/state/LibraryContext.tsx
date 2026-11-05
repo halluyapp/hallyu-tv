@@ -1,9 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  clearAllProgress,
+  clearAllWatchlist,
   clearProgressForSubject,
   emptyLibrary,
   latestProgressFor,
   loadLibrary,
+  removeProgressEntry,
   saveLibrary,
   toggleWatchlistItem,
   upsertProgress,
@@ -28,6 +31,9 @@ interface LibraryContextType {
   toggleWatchlist: (item: LibraryTitle) => Promise<void>;
   saveProgress: (row: Omit<ProgressRow, "updated_at">) => Promise<void>;
   clearProgress: (subjectId: string) => Promise<void>;
+  removeProgress: (subjectId: string, season?: number | null, episode?: number | null) => Promise<void>;
+  clearHistory: () => Promise<void>;
+  clearWatchlist: () => Promise<void>;
   refresh: () => Promise<void>;
   loading: boolean;
 }
@@ -55,7 +61,6 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     const next = update(snapshotRef.current);
     snapshotRef.current = next;
     setSnapshot(next);
-    // Serialize writes so rapid progress updates cannot land out of order.
     writeQueue.current = writeQueue.current
       .then(() => saveLibrary(next))
       .catch((err) => console.error("local library save failed:", err));
@@ -96,6 +101,16 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     [commit],
   );
 
+  const removeProgress = useCallback(
+    (subjectId: string, season: number | null = null, episode: number | null = null) =>
+      commit((prev) => removeProgressEntry(prev, subjectId, season, episode)),
+    [commit],
+  );
+
+  const clearHistory = useCallback(() => commit((prev) => clearAllProgress(prev)), [commit]);
+
+  const clearWatchlist = useCallback(() => commit((prev) => clearAllWatchlist(prev)), [commit]);
+
   return (
     <LibraryContext.Provider
       value={{
@@ -107,6 +122,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         toggleWatchlist,
         saveProgress,
         clearProgress,
+        removeProgress,
+        clearHistory,
+        clearWatchlist,
         refresh,
         loading,
       }}

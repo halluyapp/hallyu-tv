@@ -1,5 +1,5 @@
 import { LegacyFileSystem as FS, AsyncStorage } from "./native";
-import { DOWNLOADS_DIR, absolutePath } from "./paths";
+import { DOWNLOADS_DIR, absolutePath, localFileUri } from "./paths";
 import { PROVIDER_MEDIA_HEADERS } from "../provider/client";
 import { sizeWithinTolerance } from "./reasons";
 import type { DownloadResumable } from "expo-file-system/legacy";
@@ -19,7 +19,9 @@ export function absolutePathFor(relative: string): string {
 }
 
 function resolveLocal(path: string): string {
-  return path.startsWith(DOWNLOADS_DIR) ? absolutePathFor(path) : path;
+  if (!path) return path;
+  const resolved = path.startsWith(DOWNLOADS_DIR) ? absolutePathFor(path) : path;
+  return localFileUri(resolved);
 }
 
 async function hasMp4Signature(uri: string): Promise<boolean> {
@@ -70,6 +72,17 @@ export const LegacyFileSystem = {
     try {
       const info = await FS.getFreeDiskStorageAsync();
       return typeof info === "number" ? info : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async totalDiskBytes(): Promise<number | null> {
+    try {
+      const fn = (FS as unknown as { getTotalDiskCapacityAsync?: () => Promise<number> }).getTotalDiskCapacityAsync;
+      if (typeof fn !== "function") return null;
+      const info = await fn();
+      return typeof info === "number" && info > 0 ? info : null;
     } catch {
       return null;
     }

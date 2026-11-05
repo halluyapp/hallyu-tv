@@ -2,7 +2,7 @@ name: Android APK Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "arena/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -22,11 +22,17 @@ jobs:
         variant: [mobile, tv]
     env:
       APP_VARIANT: ${{ matrix.variant }}
+      EXPO_PUBLIC_APP_VARIANT: ${{ matrix.variant }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
       APP_VERSION: ${{ github.event.release.tag_name && github.event.release.tag_name || '0.1.0' }}
-      RELEASE_NOTES: ${{ github.event.release.body || 'Hallyu Android release.' }}
+      RELEASE_NOTES: ${{ github.event.release.body || 'Hallyu Liquid Glass Android release.' }}
       APP_VERSION_CODE: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -46,21 +52,27 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Validate release signing secrets
-        if: github.event_name == 'release'
+      - name: Configure Android signing keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$ANDROID_KEYSTORE_BASE64" || (echo "Missing ANDROID_KEYSTORE_BASE64 GitHub Secret" && exit 1)
-          test -n "$ANDROID_KEYSTORE_PASSWORD" || (echo "Missing ANDROID_KEYSTORE_PASSWORD GitHub Secret" && exit 1)
-          test -n "$ANDROID_KEY_ALIAS" || (echo "Missing ANDROID_KEY_ALIAS GitHub Secret" && exit 1)
-          test -n "$ANDROID_KEY_PASSWORD" || (echo "Missing ANDROID_KEY_PASSWORD GitHub Secret" && exit 1)
-          mkdir -p "$RUNNER_TEMP/hallyu-signing"
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/hallyu-signing/release.keystore"
-          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/hallyu-signing/release.keystore" >> "$GITHUB_ENV"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            test -n "$ANDROID_KEYSTORE_BASE64" || (echo "Missing ANDROID_KEYSTORE_BASE64 GitHub Secret" && exit 1)
+            test -n "$ANDROID_KEYSTORE_PASSWORD" || (echo "Missing ANDROID_KEYSTORE_PASSWORD GitHub Secret" && exit 1)
+            test -n "$ANDROID_KEY_ALIAS" || (echo "Missing ANDROID_KEY_ALIAS GitHub Secret" && exit 1)
+            test -n "$ANDROID_KEY_PASSWORD" || (echo "Missing ANDROID_KEY_PASSWORD GitHub Secret" && exit 1)
+          fi
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            mkdir -p "$RUNNER_TEMP/hallyu-signing"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/hallyu-signing/release.keystore"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/hallyu-signing/release.keystore" >> "$GITHUB_ENV"
+            echo "Release keystore configured from repository secrets."
+          else
+            echo "No release keystore secrets set for non-release run; Gradle will use fallback debug signing."
+          fi
 
       - name: Expo prebuild
         run: bunx expo prebuild -p android --clean --no-install
@@ -76,21 +88,40 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
-      - name: Name and inspect APK
+      - name: Verify APK identity and signature
         run: |
           APK=android/app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
-          if [ "$APP_VARIANT" = "tv" ]; then EXPECTED=app.hallyutv.dev; NAME=hallyu-tv.apk; else EXPECTED=app.hallyu.mobile; NAME=hallyu-mobile.apk; fi
+          if [ "$APP_VARIANT" = "tv" ]; then
+            EXPECTED=app.hallyutv.dev
+            NAME=hallyu-tv.apk
+          else
+            EXPECTED=app.hallyu.mobile
+            NAME=hallyu-mobile.apk
+          fi
           mkdir -p artifacts
           cp "$APK" "artifacts/$NAME"
-          echo "Expected package: $EXPECTED"
+
+          APKANALYZER=$(find "$ANDROID_HOME/cmdline-tools" -name apkanalyzer 2>/dev/null | head -n 1 || true)
+          if [ -n "$APKANALYZER" ]; then
+            ACTUAL_PKG=$("$APKANALYZER" manifest application-id "artifacts/$NAME" | tr -d '[:space:]')
+            ACTUAL_VC=$("$APKANALYZER" manifest version-code "artifacts/$NAME" | tr -d '[:space:]')
+            echo "Verified APK applicationId=$ACTUAL_PKG versionCode=$ACTUAL_VC"
+            test "$ACTUAL_PKG" = "$EXPECTED" || (echo "Package mismatch: expected $EXPECTED got $ACTUAL_PKG" && exit 1)
+            test "$ACTUAL_VC" = "$APP_VERSION_CODE" || (echo "VersionCode mismatch: expected $APP_VERSION_CODE got $ACTUAL_VC" && exit 1)
+          fi
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "artifacts/$NAME"
+          fi
           ls -lh "artifacts/$NAME"
 
-      - name: Create variant manifest
-        run: node scripts/create-update-manifest.mjs "artifacts/hallyu-${APP_VARIANT}.apk"
-
-      - name: Move manifest to artifact folder
-        run: mv "${APP_VARIANT}-update.json" artifacts/
+      - name: Create variant manifest and checksum
+        run: |
+          node scripts/create-update-manifest.mjs "artifacts/hallyu-${APP_VARIANT}.apk"
+          mv "${APP_VARIANT}-update.json" artifacts/
+          mv "${APP_VARIANT}-sha256.txt" artifacts/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -99,8 +130,13 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
-      - name: Publish APK and manifest to GitHub Release
+      - name: Publish APK, manifest, and checksum to GitHub Release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "artifacts/hallyu-${APP_VARIANT}.apk" "artifacts/${APP_VARIANT}-update.json" --clobber
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "artifacts/hallyu-${APP_VARIANT}.apk" \
+            "artifacts/${APP_VARIANT}-update.json" \
+            "artifacts/${APP_VARIANT}-sha256.txt" \
+            --clobber

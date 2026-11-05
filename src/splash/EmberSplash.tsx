@@ -1,101 +1,59 @@
-import { palette, spacing, gradients } from "@/design-system/tokens";
-import { APP_NAME, APP_TAGLINE } from "@/config/branding";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useRef } from "react";
 import { Animated, Easing, StyleSheet, Text, View } from "react-native";
+import { BRAND_SHORT_NAME, APP_TAGLINE } from "@/config/branding";
+import { gradients, palette, spacing } from "@/design-system/tokens";
+import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 
-/** Spatial 3D Liquid Glass Splash with animated luminous ember core. */
+/** Optical Liquid Glass Splash — pearl crystal capsule + sunset coral-ember core. */
 export function EmberSplash() {
-  const pulse = useRef(new Animated.Value(0.6)).current;
-  const rotate = useRef(new Animated.Value(0)).current;
+  const profile = usePerformanceProfile();
+  const pulse = useRef(new Animated.Value(0.86)).current;
 
   useEffect(() => {
-    const pulseLoop = Animated.loop(
+    if (profile.isLowRam) return;
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
           toValue: 1,
-          duration: 1300,
+          duration: 1100,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
         Animated.timing(pulse, {
-          toValue: 0.6,
-          duration: 1300,
+          toValue: 0.86,
+          duration: 1100,
           easing: Easing.inOut(Easing.sin),
           useNativeDriver: true,
         }),
       ]),
     );
-
-    const rotateLoop = Animated.loop(
-      Animated.timing(rotate, {
-        toValue: 1,
-        duration: 9000,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      }),
-    );
-
-    pulseLoop.start();
-    rotateLoop.start();
-
-    return () => {
-      pulseLoop.stop();
-      rotateLoop.stop();
-    };
-  }, [pulse, rotate]);
-
-  const spin = rotate.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "360deg"],
-  });
-
-  const scale = pulse.interpolate({
-    inputRange: [0.6, 1],
-    outputRange: [0.94, 1.05],
-  });
+    loop.start();
+    return () => loop.stop();
+  }, [profile.isLowRam, pulse]);
 
   return (
     <View style={styles.root}>
-      {/* Outer ambient glow */}
-      <Animated.View
-        style={[
-          styles.glowOrb,
-          {
-            opacity: pulse,
-            transform: [{ scale }],
-          },
-        ]}
-      />
-
-      {/* Rotating Prismatic Glass Ring */}
-      <Animated.View style={[styles.outerRing, { transform: [{ rotate: spin }] }]}>
-        <LinearGradient
-          colors={["rgba(255, 94, 58, 0.6)", "rgba(56, 189, 248, 0.4)", "rgba(168, 85, 247, 0.5)"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-      </Animated.View>
-
-      {/* Liquid Glass Center Sphere */}
-      <Animated.View style={[styles.glassOrb, { transform: [{ scale }] }]}>
+      <Animated.View style={[styles.glowOrb, { opacity: pulse }]} />
+      <Animated.View style={[styles.glassOrb, { transform: [{ scale: pulse }] }]}>
         <LinearGradient
           colors={gradients.glassSheen}
-          start={{ x: 0.1, y: 0 }}
-          end={{ x: 0.9, y: 0.7 }}
+          start={{ x: 0.08, y: 0 }}
+          end={{ x: 0.92, y: 0.9 }}
           style={StyleSheet.absoluteFillObject}
         />
         <LinearGradient
-          colors={gradients.accent}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
+          colors={gradients.emberCapsule}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.9, y: 1 }}
           style={styles.innerFlame}
         />
       </Animated.View>
-
       <View style={styles.textContainer}>
-        <Text style={styles.wordmark}>{APP_NAME}</Text>
+        <View style={styles.brandRow}>
+          <Text style={styles.wordmark}>{BRAND_SHORT_NAME}</Text>
+          <View style={styles.brandDot} />
+        </View>
         <Text style={styles.tagline}>{APP_TAGLINE}</Text>
       </View>
     </View>
@@ -109,35 +67,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.xl,
-    position: "relative",
   },
   glowOrb: {
     position: "absolute",
-    width: 280,
-    height: 280,
-    borderRadius: 140,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
     backgroundColor: palette.emberGlow,
   },
-  outerRing: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    padding: 2,
-    overflow: "hidden",
-    position: "absolute",
-  },
   glassOrb: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: "rgba(18, 25, 38, 0.85)",
-    borderColor: palette.glassStrokeBright,
-    borderWidth: 1,
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: "rgba(18, 25, 38, 0.84)",
+    borderColor: palette.glassStrokeHighlight,
+    borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
     shadowColor: palette.accent,
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.45,
     shadowRadius: 20,
     elevation: 10,
   },
@@ -145,26 +94,33 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    shadowColor: palette.accent,
-    shadowOpacity: 0.8,
-    shadowRadius: 10,
-    elevation: 6,
   },
   textContainer: {
     alignItems: "center",
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
+  },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 4,
   },
   wordmark: {
     color: "#FFFFFF",
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: "800",
-    letterSpacing: -0.8,
+    letterSpacing: -0.7,
+  },
+  brandDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: palette.accentBright,
+    marginTop: 6,
   },
   tagline: {
     color: palette.textSecondary,
     fontSize: 13,
     fontWeight: "500",
     marginTop: 4,
-    letterSpacing: 0.2,
   },
 });

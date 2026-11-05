@@ -17,3 +17,13 @@ export function isNewerVersion(current: string, latest: string): boolean {
   }
   return false;
 }
+
+/** Strips `file://` prefix safely so Kotlin `java.io.File(path)` can open cached APKs. */
+export function stripFileScheme(uri: string): string {
+  if (!uri.startsWith("file://")) return uri;
+  try {
+    return decodeURIComponent(uri.replace(/^file:\/\//, ""));
+  } catch {
+    return uri.replace(/^file:\/\//, "");
+  }
+}

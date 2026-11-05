@@ -1,10 +1,11 @@
 /**
- * Expo config plugin: injects `HallyuDownloader`, a small native module that
- * runs movie/episode downloads through Android's built-in DownloadManager
- * and provides safe native APK installer handoff.
+ * Expo config plugin: injects `HallyuDownloader`, a native Kotlin module that
+ * runs movie/episode downloads through Android's built-in DownloadManager,
+ * configures a dedicated FileProvider for verified in-app APK updates, and
+ * wires release keystore signing cleanly without breaking debug builds.
  */
 
-const { withDangerousMod } = require("@expo/config-plugins");
+const { withAndroidManifest, withDangerousMod } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
 
@@ -17,7 +18,7 @@ const MEDIA_HEADERS = {
 
 const PACKAGE = "app.hallyutv.dev";
 
-/** The Kotlin files as text. Kept pure so a unit test can assert on them. */
+/** The Kotlin files as text. Kept pure so unit tests can assert on them. */
 function buildDownloaderSources(packageName = PACKAGE) {
   const moduleKt = `package ${packageName}
 
@@ -25,11 +26,9 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
-import android.provider.Settings
-import java.security.MessageDigest
 import android.database.Cursor
 import android.net.Uri
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -37,10 +36,11 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * Runs downloads through the system DownloadManager, reports status back
- * to JS, and provides native Android APK installer launching.
+ * to JS, and provides SHA-256 + package-verified Android APK installer handoff.
  */
 class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -57,6 +57,16 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
     private fun targetFile(key: String): File {
         val base = reactContext.getExternalFilesDir(null) ?: reactContext.filesDir
         return File(base, relativePath(key))
+    }
+
+    private fun resolveLocalFile(rawPath: String): File {
+        val trimmed = rawPath.trim()
+        if (trimmed.startsWith("file://")) {
+            val parsed = Uri.parse(trimmed).path
+            if (!parsed.isNullOrEmpty()) return File(parsed)
+            return File(trimmed.removePrefix("file://"))
+        }
+        return File(trimmed)
     }
 
     private fun downloadManager(): DownloadManager =
@@ -148,13 +158,36 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
     }
 
     @ReactMethod
-    fun verifyAndInstallApk(filePath: String, expectedPackage: String, expectedVersionCode: Double, expectedSha256: String, promise: Promise) {
+    fun canInstallPackages(promise: Promise) {
         try {
-            val file = File(filePath)
+            if (android.os.Build.VERSION.SDK_INT < 26) {
+                promise.resolve(true)
+            } else {
+                promise.resolve(reactContext.packageManager.canRequestPackageInstalls())
+            }
+        } catch (_: Exception) {
+            promise.resolve(false)
+        }
+    }
+
+    @ReactMethod
+    fun verifyAndInstallApk(
+        filePath: String,
+        expectedPackage: String,
+        expectedVersionCode: Double,
+        expectedSha256: String,
+        promise: Promise
+    ) {
+        try {
+            val file = resolveLocalFile(filePath)
             if (!file.isFile || !file.canRead()) {
-                promise.reject("E_FILE_NOT_FOUND", "Downloaded APK is not readable")
+                promise.resolve(Arguments.createMap().apply {
+                    putBoolean("success", false)
+                    putString("error", "Downloaded APK file is missing or unreadable on disk.")
+                })
                 return
             }
+
             val digest = MessageDigest.getInstance("SHA-256")
             file.inputStream().use { input ->
                 val buffer = ByteArray(64 * 1024)
@@ -168,7 +201,8 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
             if (!actualHash.equals(expectedSha256, ignoreCase = true)) {
                 promise.resolve(Arguments.createMap().apply {
                     putBoolean("success", false)
-                    putString("error", "APK SHA-256 verification failed")
+                    putBoolean("corrupt", true)
+                    putString("error", "APK SHA-256 checksum verification failed.")
                 })
                 return
             }
@@ -184,7 +218,8 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
             if (archivePackage != expectedPackage || archiveVersion != expectedVersionCode.toLong()) {
                 promise.resolve(Arguments.createMap().apply {
                     putBoolean("success", false)
-                    putString("error", "APK package or version does not match this app")
+                    putBoolean("corrupt", true)
+                    putString("error", "APK package or version code does not match this installed Hallyu variant.")
                 })
                 return
             }
@@ -197,28 +232,27 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
                 reactContext.startActivity(settingsIntent)
                 promise.resolve(Arguments.createMap().apply {
                     putBoolean("success", false)
-                    putString("error", "Allow installs from Hallyu in Android settings, then tap Install Update again.")
+                    putBoolean("needsPermission", true)
+                    putString("error", "Allow installs from Hallyu in Android settings, then select Install Update again.")
                 })
                 return
             }
 
-            val contentUri = FileProvider.getUriForFile(
-                reactContext,
-                "\${reactContext.packageName}.FileSystemFileProvider",
-                file
-            )
+            val authority = "\${reactContext.packageName}.hallyu.updateprovider"
+            val contentUri = FileProvider.getUriForFile(reactContext, authority, file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(contentUri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             reactContext.startActivity(intent)
-            promise.resolve(Arguments.createMap().apply { putBoolean("success", true) })
+            promise.resolve(Arguments.createMap().apply {
+                putBoolean("success", true)
+            })
         } catch (e: Exception) {
             promise.reject("E_INSTALL", e.message ?: "APK verification or installer handoff failed", e)
         }
     }
-
 }
 `;
 
@@ -243,6 +277,47 @@ class HallyuDownloaderPackage : ReactPackage {
   return { moduleKt, packageKt };
 }
 
+function patchUpdateFileProviderManifest(manifest, packageName = PACKAGE) {
+  const application = manifest.manifest?.application?.[0];
+  if (!application) return manifest;
+  application.provider = application.provider ?? [];
+  const authority = `${packageName}.hallyu.updateprovider`;
+  const exists = application.provider.some((p) => p.$?.["android:authorities"] === authority);
+  if (!exists) {
+    application.provider.push({
+      $: {
+        "android:name": "androidx.core.content.FileProvider",
+        "android:authorities": authority,
+        "android:exported": "false",
+        "android:grantUriPermissions": "true",
+      },
+      "meta-data": [
+        {
+          $: {
+            "android:name": "android.support.FILE_PROVIDER_PATHS",
+            "android:resource": "@xml/hallyu_update_paths",
+          },
+        },
+      ],
+    });
+  }
+  return manifest;
+}
+
+function writeUpdateFileProviderPaths(androidProjectRoot) {
+  const xmlDir = path.join(androidProjectRoot, "app", "src", "main", "res", "xml");
+  fs.mkdirSync(xmlDir, { recursive: true });
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="hallyu_cache" path="." />
+    <external-cache-path name="hallyu_ext_cache" path="." />
+    <files-path name="hallyu_files" path="." />
+    <external-files-path name="hallyu_ext_files" path="." />
+</paths>
+`;
+  fs.writeFileSync(path.join(xmlDir, "hallyu_update_paths.xml"), xml, "utf8");
+}
+
 /** Patch the generated MainApplication.kt so the package is registered. */
 function patchMainApplication(androidProjectRoot, packageName = PACKAGE) {
   const pkgDir = path.join(androidProjectRoot, "app/src/main/java", ...packageName.split("."));
@@ -260,33 +335,34 @@ function patchMainApplication(androidProjectRoot, packageName = PACKAGE) {
 
   const anchor = "PackageList(this).packages.apply {";
   if (src.includes(anchor)) {
-    src = src.replace(
-      anchor,
-      `${anchor}\n                add(HallyuDownloaderPackage())`,
-    );
+    src = src.replace(anchor, `${anchor}\n                add(HallyuDownloaderPackage())`);
   } else {
     const generic = "PackageList(this).packages";
     if (!src.includes(generic)) {
       throw new Error("withHallyuDownloader: could not locate a package registration anchor in MainApplication.kt");
     }
-    src = src.replace(
-      generic,
-      "PackageList(this).packages.toMutableList().apply { add(HallyuDownloaderPackage()) }",
-    );
+    src = src.replace(generic, "PackageList(this).packages.toMutableList().apply { add(HallyuDownloaderPackage()) }");
   }
   fs.writeFileSync(mainAppPath, src, "utf8");
 }
 
-function patchReleaseSigning(androidProjectRoot) {
-  const gradlePath = path.join(androidProjectRoot, "app/build.gradle");
-  if (!fs.existsSync(gradlePath)) return;
-  let src = fs.readFileSync(gradlePath, "utf8");
-  if (src.includes("HALLYU_RELEASE_SIGNING")) return;
+/**
+ * Safely patches release signing in app/build.gradle without touching debug
+ * signing, and falls back to signingConfigs.debug when CI release secrets are
+ * not supplied so PR / local verification builds still succeed cleanly.
+ */
+function patchReleaseSigningSource(src) {
+  if (src.includes("HALLYU_RELEASE_SIGNING")) return src;
   const signingAnchor = "    signingConfigs {";
+  if (!src.includes(signingAnchor)) {
+    throw new Error("withHallyuDownloader: could not locate Android signingConfigs");
+  }
+  const hasReleaseEnvExpr =
+    '(System.getenv("ANDROID_KEYSTORE_PATH") && System.getenv("ANDROID_KEYSTORE_PASSWORD") && System.getenv("ANDROID_KEY_ALIAS") && System.getenv("ANDROID_KEY_PASSWORD"))';
   const releaseSigning = `    signingConfigs {
-        // HALLYU_RELEASE_SIGNING: local builds use Expo's debug key; release CI supplies protected secrets.
+        // HALLYU_RELEASE_SIGNING: CI release builds use protected keystore secrets; local/PR builds fall back safely.
         release {
-            if (System.getenv("ANDROID_KEYSTORE_PATH") && System.getenv("ANDROID_KEYSTORE_PASSWORD") && System.getenv("ANDROID_KEY_ALIAS") && System.getenv("ANDROID_KEY_PASSWORD")) {
+            if (${hasReleaseEnvExpr}) {
                 storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
                 storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
                 keyAlias System.getenv("ANDROID_KEY_ALIAS")
@@ -294,26 +370,54 @@ function patchReleaseSigning(androidProjectRoot) {
             }
         }
 `;
-  if (!src.includes(signingAnchor)) throw new Error("withHallyuDownloader: could not locate Android signingConfigs");
-  src = src.replace(signingAnchor, releaseSigning);
-  src = src.replace(/release\s*\{([\s\S]*?)signingConfig signingConfigs\.debug([\s\S]*?)\}/, (block) => block.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.release"));
-  fs.writeFileSync(gradlePath, src, "utf8");
+  let out = src.replace(signingAnchor, releaseSigning);
+
+  const buildTypesIdx = out.indexOf("    buildTypes {");
+  if (buildTypesIdx >= 0) {
+    const before = out.slice(0, buildTypesIdx);
+    const after = out.slice(buildTypesIdx).replace(
+      /(release\s*\{[\s\S]*?)signingConfig\s+signingConfigs\.debug/,
+      `$1signingConfig (${hasReleaseEnvExpr} ? signingConfigs.release : signingConfigs.debug)`,
+    );
+    out = before + after;
+  }
+  return out;
 }
 
-const withHallyuDownloader = (config) =>
-  withDangerousMod(config, [
+function patchReleaseSigning(androidProjectRoot) {
+  const gradlePath = path.join(androidProjectRoot, "app/build.gradle");
+  if (!fs.existsSync(gradlePath)) return;
+  const src = fs.readFileSync(gradlePath, "utf8");
+  const patched = patchReleaseSigningSource(src);
+  if (patched !== src) {
+    fs.writeFileSync(gradlePath, patched, "utf8");
+  }
+}
+
+const withHallyuDownloader = (config) => {
+  config = withAndroidManifest(config, (modConfig) => {
+    const pkg = modConfig.android?.package || PACKAGE;
+    modConfig.modResults = patchUpdateFileProviderManifest(modConfig.modResults, pkg);
+    return modConfig;
+  });
+  config = withDangerousMod(config, [
     "android",
-    (config) => {
-      const pkg = config.android?.package || PACKAGE;
-      const androidRoot = path.join(config.modRequest.projectRoot, "android");
+    (modConfig) => {
+      const pkg = modConfig.android?.package || PACKAGE;
+      const androidRoot = path.join(modConfig.modRequest.projectRoot, "android");
+      writeUpdateFileProviderPaths(androidRoot);
       patchMainApplication(androidRoot, pkg);
       patchReleaseSigning(androidRoot);
-      return config;
+      return modConfig;
     },
   ]);
+  return config;
+};
 
 module.exports = withHallyuDownloader;
 module.exports.buildDownloaderSources = buildDownloaderSources;
 module.exports.MEDIA_HEADERS = MEDIA_HEADERS;
 module.exports.PACKAGE = PACKAGE;
 module.exports.patchReleaseSigning = patchReleaseSigning;
+module.exports.patchReleaseSigningSource = patchReleaseSigningSource;
+module.exports.patchUpdateFileProviderManifest = patchUpdateFileProviderManifest;

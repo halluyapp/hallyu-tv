@@ -108,6 +108,24 @@ export function clearProgressForSubject(snapshot: LibrarySnapshot, subjectId: st
   return { ...snapshot, progress: snapshot.progress.filter((p) => p.subject_id !== subjectId) };
 }
 
+export function removeProgressEntry(
+  snapshot: LibrarySnapshot,
+  subjectId: string,
+  seasonNumber: number | null = null,
+  episodeNumber: number | null = null,
+): LibrarySnapshot {
+  const key = progressKey({ subject_id: subjectId, season_number: seasonNumber, episode_number: episodeNumber });
+  return { ...snapshot, progress: snapshot.progress.filter((p) => progressKey(p) !== key) };
+}
+
+export function clearAllProgress(snapshot: LibrarySnapshot): LibrarySnapshot {
+  return { ...snapshot, progress: [] };
+}
+
+export function clearAllWatchlist(snapshot: LibrarySnapshot): LibrarySnapshot {
+  return { ...snapshot, watchlist: [] };
+}
+
 export function latestProgressFor(progress: ProgressRow[], subjectId: string): ProgressRow | null {
   return sortProgress(progress.filter((p) => p.subject_id === subjectId))[0] ?? null;
 }

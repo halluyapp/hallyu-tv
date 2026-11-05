@@ -263,6 +263,46 @@ export function selectSource(sources: NormalizedSource[], requested?: string | n
   return pickFrom(selectableSources(sources), requested);
 }
 
+/**
+ * Platform- & viewer-preference-aware source picker:
+ * - Explicit resolution ("1080p" | "720p" | "480p" | "360p"): picks exact match or closest <= rung.
+ * - "auto" on TV (`isTv === true`): prefers highest verified full-length HD (1080p -> 720p -> 480p -> best).
+ * - "auto" on Mobile (`isTv === false`): uses data-conscious verified 360p default.
+ */
+export function selectPreferredSource(
+  sources: NormalizedSource[],
+  preference: "auto" | "1080p" | "720p" | "480p" | "360p" = "auto",
+  isTv = false,
+): NormalizedSource | null {
+  const pool = selectableSources(sources);
+  if (pool.length === 0) return null;
+  const verified = pool.filter((s) => s.verifiedFullLength === true);
+  const target = verified.length > 0 ? verified : pool;
+
+  if (preference !== "auto") {
+    const exact = pool.find((s) => s.resolution === preference);
+    if (exact) return exact;
+    const wantedNum = qualityValue(preference) ?? 0;
+    const sortedDesc = [...target].sort((a, b) => (b.qualityValue ?? 0) - (a.qualityValue ?? 0));
+    const lowerOrEqual = sortedDesc.find((s) => (s.qualityValue ?? 0) > 0 && (s.qualityValue ?? 0) <= wantedNum);
+    if (lowerOrEqual) return lowerOrEqual;
+    return sortedDesc[sortedDesc.length - 1] ?? null;
+  }
+
+  if (isTv) {
+    const sortedDesc = [...target].sort((a, b) => {
+      const mp4A = a.format.toUpperCase() === "MP4" ? 0 : 1;
+      const mp4B = b.format.toUpperCase() === "MP4" ? 0 : 1;
+      if (mp4A !== mp4B) return mp4A - mp4B;
+      return (b.qualityValue ?? 0) - (a.qualityValue ?? 0);
+    });
+    const hd = sortedDesc.find((s) => (s.qualityValue ?? 0) >= 720 && (s.qualityValue ?? 0) <= 1080);
+    return hd ?? sortedDesc[0] ?? null;
+  }
+
+  return selectSource(sources, null);
+}
+
 /** Downloads require progressive MP4. An explicit requested quality that is not
  * downloadable returns null instead of silently substituting another source;
  * callers can fall back to the default download rule with no requested quality. */
