@@ -8,11 +8,10 @@ import { PlayerScreen } from "@/screens/player/PlayerScreen";
 import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
 import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
 import { TvSettingsScreen } from "@/screens/tv/TvSettingsScreen";
-import { TvPairingScreen } from "@/screens/tv/TvPairingScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
 import { completeOnboarding } from "@/utils/onboarding";
 import { useSound } from "@/services/sound/SoundContext";
-import { useStage } from "@/hooks/useStage";
+import { IS_TV } from "@/config/appVariant";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import type { NavigatorScreenParams } from "@react-navigation/native";
@@ -36,14 +35,12 @@ export type RootStackParamList = {
     episode: number;
     resumeAt: number;
     sources: StreamSource[];
-    /** When set, the player offers this following episode once this one ends. */
     nextEpisode?: { season: number; episode: number } | null;
   };
   TvHome: undefined;
   TvSearch: undefined;
   TvDownloads: undefined;
   TvSettings: undefined;
-  TvPairing: undefined;
 };
 
 export type TabParamList = {
@@ -83,7 +80,6 @@ function MainTabs() {
         headerShown: false,
         tabBarBackground: () => (
           <View style={StyleSheet.absoluteFill}>
-            {/* Top glass sheen */}
             <LinearGradient
               colors={gradients.glassSheen}
               start={{ x: 0.1, y: 0 }}
@@ -91,7 +87,6 @@ function MainTabs() {
               style={styles.dockSheen}
               pointerEvents="none"
             />
-            {/* Top specular hairline edge */}
             <View style={styles.dockSpecularRim} pointerEvents="none" />
           </View>
         ),
@@ -129,20 +124,19 @@ function MainTabs() {
 }
 
 export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
-  const stage = useStage();
-  if (stage.remote) {
+  if (IS_TV) {
     return (
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
         <Stack.Screen name="TvHome" component={TvHomeScreen} />
         <Stack.Screen name="TvSearch" component={TvSearchScreen} />
         <Stack.Screen name="TvDownloads" component={DownloadsScreen} />
         <Stack.Screen name="TvSettings" component={TvSettingsScreen} />
-        <Stack.Screen name="TvPairing" component={TvPairingScreen} />
         <Stack.Screen name="Details" component={DetailsScreen} />
-        <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "all" }} />
+        <Stack.Screen name="Player" component={PlayerScreen} options={{ orientation: "landscape" }} />
       </Stack.Navigator>
     );
   }
+
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
       {showOnboarding ? (

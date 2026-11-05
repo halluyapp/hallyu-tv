@@ -3,7 +3,6 @@ import { RootNavigator } from "@/navigation/RootNavigator";
 import { LibraryProvider } from "@/state/LibraryContext";
 import { SoundProvider } from "@/services/sound/SoundContext";
 import { DisplayModeProvider } from "@/state/DisplayModeContext";
-import { AuthProvider } from "@/services/auth/AuthContext";
 import { hasCompletedOnboarding } from "@/utils/onboarding";
 import { DarkTheme, NavigationContainer } from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
@@ -40,7 +39,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
     if (this.state.error) {
       return (
         <View style={styles.errorRoot}>
-          <Text style={styles.errorTitle}>Hallyu TV hit a problem</Text>
+          <Text style={styles.errorTitle}>Hallyu hit a problem</Text>
           <Text style={styles.errorMessage}>{this.state.error.message}</Text>
           <Text style={styles.errorRetry} onPress={() => this.setState({ error: null })}>
             Tap to restart the app
@@ -74,9 +73,7 @@ export default function App() {
             <DisplayModeProvider>
               <SoundProvider>
                 <LibraryProvider>
-                  <AuthProvider>
-                    <RootNavigator showOnboarding={showOnboarding} />
-                  </AuthProvider>
+                  <RootNavigator showOnboarding={showOnboarding} />
                 </LibraryProvider>
               </SoundProvider>
             </DisplayModeProvider>

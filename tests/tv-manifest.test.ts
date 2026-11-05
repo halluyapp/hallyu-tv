@@ -53,14 +53,20 @@ describe("Android TV manifest support", () => {
     expect(categories.filter((c: any) => c.$["android:name"] === "android.intent.category.LEANBACK_LAUNCHER")).toHaveLength(1);
   });
 
-  test("app config registers the TV and downloader plugins only", () => {
-    const appJson = JSON.parse(readFileSync(join(import.meta.dir, "..", "app.json"), "utf8"));
-    // Plugin identity is the contract: exactly these three, in order. The
-    // expo-video entry may carry config props (PiP / background playback).
-    const names = appJson.expo.plugins.map((p: string | [string, unknown]) => (Array.isArray(p) ? p[0] : p));
-    expect(names).toEqual(["expo-video", "./plugins/withHallyuDownloader", "./plugins/withAndroidTvSupport"]);
-    const videoEntry = appJson.expo.plugins.find((p: unknown) => Array.isArray(p));
-    expect(videoEntry?.[1]?.supportsPictureInPicture).toBe(true);
-    expect(appJson.expo.android.permissions).not.toContain("android.permission.CAMERA");
+  test("build-time TV config registers Leanback and downloader; mobile excludes Leanback", () => {
+    const getConfig = require("../app.config.js");
+    const base = JSON.parse(readFileSync(join(import.meta.dir, "..", "app.json"), "utf8")).expo;
+    process.env.APP_VARIANT = "tv";
+    const tv = getConfig({ config: base });
+    const tvNames = tv.plugins.map((p: string | [string, unknown]) => (Array.isArray(p) ? p[0] : p));
+    expect(tvNames).toEqual(["expo-video", "./plugins/withHallyuDownloader", "./plugins/withAndroidTvSupport"]);
+    const tvVideo = tv.plugins.find((p: unknown) => Array.isArray(p));
+    expect(tvVideo?.[1]?.supportsPictureInPicture).toBe(true);
+    process.env.APP_VARIANT = "mobile";
+    const mobile = getConfig({ config: base });
+    const mobileNames = mobile.plugins.map((p: string | [string, unknown]) => (Array.isArray(p) ? p[0] : p));
+    expect(mobileNames).toEqual(["expo-video", "./plugins/withHallyuDownloader"]);
+    expect(tv.android.package).not.toBe(mobile.android.package);
+    expect(mobile.android.permissions).not.toContain("android.permission.CAMERA");
   });
 });

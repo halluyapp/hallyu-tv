@@ -7,18 +7,33 @@ import { detectTelevision, deviceLabel } from "@/services/device/tvDetection";
 import { useSound } from "@/services/sound/SoundContext";
 import { useDisplayMode } from "@/state/DisplayModeContext";
 import { AmbientGlow } from "@/components/ui/AmbientGlow";
+import {
+  checkForAppUpdates,
+  downloadAndInstallUpdate,
+  clearOldUpdates,
+  type UpdateCheckResult,
+} from "@/services/updater/appUpdater";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Check, ChevronLeft, ChevronRight, Monitor, Smartphone, Tv } from "lucide-react-native";
-import React, { useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Check,
+  ChevronLeft,
+  DownloadCloud,
+  Monitor,
+  RefreshCw,
+  Smartphone,
+  Trash2,
+  Tv,
+} from "lucide-react-native";
+import React, { useMemo, useState, useCallback } from "react";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const OPTIONS: { key: DisplayMode; label: string; hint: string; Icon: typeof Tv }[] = [
-  { key: "auto", label: "Auto", hint: "Phone, tablet or television — detected from this device", Icon: Smartphone },
-  { key: "tv", label: "TV Stage", hint: "10-foot remote experience with spatial targets", Icon: Tv },
+  { key: "tv", label: "TV Stage (Recommended)", hint: "10-foot remote experience with spatial targets", Icon: Tv },
+  { key: "auto", label: "Auto", hint: "Adapts to screen size and device profile", Icon: Smartphone },
   { key: "tablet", label: "Tablet Canvas", hint: "Mid-size layout for tablets and foldable screens", Icon: Monitor },
 ];
 
@@ -28,12 +43,75 @@ export function TvSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { mode, setMode } = useDisplayMode();
   const { play } = useSound();
-  const [focused, setFocused] = useState<DisplayMode | "back" | "pairing" | null>(null);
+  const [focused, setFocused] = useState<string | null>(null);
+
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
 
   const identity = useMemo(() => readDeviceIdentity(), []);
   const television = useMemo(() => detectTelevision(identity), [identity]);
-  const detectedLabel = television ? "Television" : stage.tier === "compact" ? "Phone" : "Tablet or monitor";
-  const overrideLabel = mode === "auto" ? "Auto" : mode === "tv" ? "TV override" : "Tablet override";
+  const detectedLabel = television ? "Television / Android TV" : stage.tier === "compact" ? "Phone" : "Tablet or monitor";
+
+  const handleCheckUpdate = useCallback(async () => {
+    setCheckingUpdate(true);
+    play("tap");
+    try {
+      const res = await checkForAppUpdates("tv");
+      setUpdateInfo(res);
+      if (res.hasUpdate && res.manifest) {
+        Alert.alert(
+          "Update Available",
+          `A new Hallyu TV version (${res.manifest.version}) is available. Select 'Install Update' to upgrade.`
+        );
+      } else {
+        Alert.alert("Up to Date", `Hallyu TV (${res.currentVersion}) is on the latest release.`);
+      }
+    } catch {
+      Alert.alert("Update Notice", "Could not check for releases right now.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, [play]);
+
+  const handleInstallUpdate = useCallback(async () => {
+    if (!updateInfo?.manifest) return;
+    setDownloadingUpdate(true);
+    setUpdateProgress(0);
+    play("confirm");
+    try {
+      const res = await downloadAndInstallUpdate(updateInfo.manifest, (prog) => {
+        setUpdateProgress(prog);
+      });
+      if (!res.success) {
+        Alert.alert("Update Error", res.error || "Failed to download update APK.");
+      }
+    } catch {
+      Alert.alert("Install Error", "Failed to launch package installer.");
+    } finally {
+      setDownloadingUpdate(false);
+    }
+  }, [updateInfo, play]);
+
+  const handleClearCache = useCallback(async () => {
+    Alert.alert(
+      "Clear Storage Cache",
+      "Remove temporary video buffers and downloaded release packages?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            await clearOldUpdates();
+            play("confirm");
+            Alert.alert("Storage Cleaned", "Temporary cache has been cleared.");
+          },
+        },
+      ]
+    );
+  }, [play]);
 
   return (
     <View
@@ -77,7 +155,7 @@ export function TvSettingsScreen() {
           gap: stage.cardGap,
         }}
       >
-        <Text style={{ color: "#FFFFFF", fontSize: stage.titleSize, fontWeight: "800" }}>Device & Screen</Text>
+        <Text style={{ color: "#FFFFFF", fontSize: stage.titleSize, fontWeight: "800" }}>TV Preferences & Updates</Text>
         <Text
           style={{
             color: palette.textSecondary,
@@ -86,69 +164,153 @@ export function TvSettingsScreen() {
             maxWidth: Math.round(stage.width * 0.72),
           }}
         >
-          Manage device pairing, phone authentication, and display layout seamlessly.
+          Independent Android TV edition with direct Zarhosting streaming and native in-app updates.
         </Text>
 
-        {/* TV Pairing Action Card */}
+        {/* In-App TV Updates Section */}
+        <View style={[styles.cardGroup, { padding: stage.cardGap * 1.2, gap: 10 }]}>
+          <Text style={{ color: palette.accentBright, fontSize: stage.metaSize, fontWeight: "700", letterSpacing: 0.8 }}>
+            HALLYU TV IN-APP UPDATES
+          </Text>
+          <Text style={{ color: palette.textSecondary, fontSize: stage.metaSize }}>
+            Checks for Hallyu TV releases (package: app.hallyutv.dev) with automatic APK verification.
+          </Text>
+
+          <View style={{ flexDirection: "row", gap: stage.cardGap, marginTop: 4 }}>
+            <Pressable
+              onPress={handleCheckUpdate}
+              onFocus={() => setFocused("check-update")}
+              onBlur={() => setFocused(null)}
+              disabled={checkingUpdate || downloadingUpdate}
+              accessibilityRole="button"
+              accessibilityLabel="Check for updates"
+              style={[
+                styles.actionBtn,
+                {
+                  borderColor: focused === "check-update" ? palette.accentBright : palette.glassStrokeBright,
+                  backgroundColor: focused === "check-update" ? "rgba(255, 94, 58, 0.25)" : palette.glassFillStrong,
+                },
+                focused === "check-update" && styles.focusedGlow,
+              ]}
+            >
+              {checkingUpdate ? (
+                <ActivityIndicator size="small" color={palette.accentBright} />
+              ) : (
+                <RefreshCw size={Math.round(stage.u * 3)} color={palette.accentBright} />
+              )}
+              <Text style={{ color: palette.accentBright, fontSize: stage.bodySize, fontWeight: "700" }}>
+                Check for Updates
+              </Text>
+            </Pressable>
+
+            {updateInfo?.hasUpdate && updateInfo.manifest && (
+              <Pressable
+                onPress={handleInstallUpdate}
+                onFocus={() => setFocused("install-update")}
+                onBlur={() => setFocused(null)}
+                disabled={downloadingUpdate}
+                accessibilityRole="button"
+                accessibilityLabel="Install update"
+                style={[
+                  styles.actionBtn,
+                  {
+                    borderColor: focused === "install-update" ? palette.accentBright : palette.accent,
+                    backgroundColor: palette.accent,
+                  },
+                  focused === "install-update" && styles.focusedGlow,
+                ]}
+              >
+                {downloadingUpdate ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <DownloadCloud size={Math.round(stage.u * 3)} color="#fff" />
+                )}
+                <Text style={{ color: "#fff", fontSize: stage.bodySize, fontWeight: "700" }}>
+                  {downloadingUpdate ? "Downloading..." : "Install Update"}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+
+          {downloadingUpdate && (
+            <View style={{ marginTop: 8, gap: 4 }}>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${Math.round(updateProgress * 100)}%` }]} />
+              </View>
+              <Text style={{ color: palette.textMuted, fontSize: stage.metaSize, textAlign: "right" }}>
+                {Math.round(updateProgress * 100)}% downloaded
+              </Text>
+            </View>
+          )}
+
+          {updateInfo?.manifest && (
+            <View style={{ marginTop: 6, padding: 8, backgroundColor: "rgba(0,0,0,0.3)", borderRadius: radius.sm }}>
+              <Text style={{ color: palette.accentBright, fontSize: stage.metaSize, fontWeight: "700" }}>
+                Latest: v{updateInfo.manifest.version}
+              </Text>
+              <Text style={{ color: palette.textSecondary, fontSize: stage.metaSize, marginTop: 2 }}>
+                {updateInfo.manifest.releaseNotes}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Storage Maintenance */}
         <Pressable
-          onPress={() => {
-            play("tap");
-            navigation.navigate("TvPairing");
-          }}
-          onFocus={() => setFocused("pairing")}
+          onPress={handleClearCache}
+          onFocus={() => setFocused("clear-cache")}
           onBlur={() => setFocused(null)}
           accessibilityRole="button"
-          accessibilityLabel="Connect Phone to Android TV"
+          accessibilityLabel="Clear temporary cache"
           style={[
             styles.optionCard,
             {
               minHeight: stage.controlSize,
-              padding: Math.round(stage.cardGap * 1.2),
+              padding: Math.round(stage.cardGap * 1.1),
               borderRadius: radius.card,
-              borderColor: focused === "pairing" ? palette.accentBright : palette.glassStrokeBright,
-              backgroundColor: focused === "pairing" ? "rgba(255, 94, 58, 0.2)" : palette.surfaceGlass,
+              borderColor: focused === "clear-cache" ? palette.accentBright : palette.glassStroke,
+              backgroundColor: focused === "clear-cache" ? "rgba(255, 94, 58, 0.2)" : palette.surfaceGlass,
               gap: stage.cardGap,
-              marginTop: stage.cardGap * 0.5,
             },
-            focused === "pairing" && styles.focusedGlow,
+            focused === "clear-cache" && styles.focusedGlow,
           ]}
         >
-          <Smartphone size={Math.round(stage.u * 3.4)} color={palette.accentBright} />
+          <Trash2 size={Math.round(stage.u * 3.4)} color={palette.textSecondary} />
           <View style={{ flex: 1 }}>
             <Text style={{ color: "#FFFFFF", fontSize: stage.bodySize, fontWeight: "700" }}>
-              Connect Phone to Android TV
+              Clean Storage & Updates Cache
             </Text>
             <Text style={{ color: palette.textSecondary, fontSize: stage.metaSize, marginTop: 2 }}>
-              Generate a 6-digit PIN to link your mobile profile and sync Watchlist
+              Reclaim internal flash memory on Android TV box
             </Text>
           </View>
-          <ChevronRight size={Math.round(stage.u * 3)} color={palette.accentBright} />
         </Pressable>
 
+        {/* Hardware Identity Info Card */}
         <View
           style={[
             styles.detected,
             {
-              marginTop: stage.cardGap,
               padding: Math.round(stage.cardGap * 1.2),
               borderRadius: radius.card,
             },
           ]}
         >
           <Text style={{ color: palette.accentBright, fontSize: stage.metaSize, letterSpacing: 0.8, fontWeight: "700" }}>
-            HARDWARE IDENTITY
+            HARDWARE IDENTITY & PACKAGE
           </Text>
           <Text style={{ color: "#FFFFFF", fontSize: stage.bodySize, fontWeight: "700", marginTop: 4 }}>
             {deviceLabel(identity)} · {detectedLabel}
           </Text>
           <Text style={{ color: palette.textMuted, fontSize: stage.metaSize, marginTop: 2 }}>
-            {stage.width}×{stage.height} viewport · {overrideLabel}
+            Package: app.hallyutv.dev · {stage.width}×{stage.height} Stage
           </Text>
         </View>
 
-        <View style={{ marginTop: stage.rowGap * 0.5, gap: stage.cardGap }}>
+        {/* Screen Layout Selection */}
+        <View style={{ marginTop: stage.rowGap * 0.3, gap: stage.cardGap }}>
           <Text style={{ color: "#FFFFFF", fontSize: stage.railTitleSize, fontWeight: "700", marginBottom: 4 }}>
-            Screen Layout
+            Screen Layout Mode
           </Text>
           {OPTIONS.map((option) => {
             const selected = mode === option.key;
@@ -213,6 +375,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  cardGroup: {
+    backgroundColor: palette.surfaceGlass,
+    borderRadius: radius.card,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  actionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 8,
+  },
   detected: {
     borderColor: palette.glassStrokeBright,
     backgroundColor: palette.surfaceGlass,
@@ -230,4 +408,11 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 8,
   },
+  progressBar: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: palette.surfaceRaised,
+    overflow: "hidden",
+  },
+  progressFill: { height: "100%", backgroundColor: palette.accentBright },
 });

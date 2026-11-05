@@ -1,7 +1,4 @@
-import { LibraryTitle } from "@/state/LibraryContext";
-import { Poster, initialsFor } from "@/components/ui/Poster";
-import { AmbientGlow } from "@/components/ui/AmbientGlow";
-import { GoogleSignInButton } from "@/components/ui/GoogleSignInButton";
+import { Poster } from "@/components/ui/Poster";
 import { palette, radius, spacing, gradients } from "@/design-system/tokens";
 import { RootStackParamList } from "@/navigation/RootNavigator";
 import { useLibrary } from "@/state/LibraryContext";
@@ -9,28 +6,26 @@ import { useDisplayMode } from "@/state/DisplayModeContext";
 import { useStage } from "@/hooks/useStage";
 import type { DisplayMode } from "@/design-system/stage";
 import { useSound } from "@/services/sound/SoundContext";
-import { useAuth } from "@/services/auth/AuthContext";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useNavigation } from "@react-navigation/native";
 import Slider from "@react-native-community/slider";
 import { LinearGradient } from "expo-linear-gradient";
 import {
-  MonitorSmartphone,
-  ShieldCheck,
   Vibrate,
   Volume2,
   VolumeX,
   DownloadCloud,
   RefreshCw,
-  Cloud,
-  CheckCircle2,
-  LogOut,
-  Tv,
-  Smartphone,
-  Unlink,
+  Trash2,
+  HardDrive,
 } from "lucide-react-native";
-import { checkForAppUpdates, startUpdateDownload, type UpdateCheckResult } from "@/services/updater/appUpdater";
-import { ActivityIndicator, Alert, TextInput } from "react-native";
+import {
+  checkForAppUpdates,
+  downloadAndInstallUpdate,
+  clearOldUpdates,
+  type UpdateCheckResult,
+} from "@/services/updater/appUpdater";
+import { ActivityIndicator, Alert } from "react-native";
 import React, { useState, useCallback } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -38,480 +33,360 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const DISPLAY_OPTIONS: { key: DisplayMode; label: string; hint: string }[] = [
-  { key: "auto", label: "Auto", hint: "Adaptive screen" },
-  { key: "tv", label: "TV Stage", hint: "10-foot remote" },
-  { key: "tablet", label: "Tablet", hint: "Spatial canvas" },
+  { key: "auto", label: "Automatic", hint: "Adapts to screen size and device profile" },
+    { key: "tablet", label: "Tablet", hint: "Multi-column landscape interface" },
 ];
 
 export function MySpaceScreen() {
   const { watchlist, progress } = useLibrary();
-  const {
-    enabled: soundEnabled,
-    setEnabled: setSoundEnabled,
-    volume,
-    setVolume,
-    hapticsEnabled,
-    setHapticsEnabled,
-    play,
-  } = useSound();
-  const {
-    user,
-    isSyncing,
-    signInWithGoogle,
-    signOut,
-    syncCloudWatchlist,
-    pairedDevices,
-    pairTvWithPin,
-    unpairDevice,
-  } = useAuth();
+  const { enabled: soundEnabled, setEnabled: setSoundEnabled, hapticsEnabled, setHapticsEnabled, volume, setVolume, play } = useSound();
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
   const { mode, setMode } = useDisplayMode();
   const stage = useStage();
-
-  const [tvPinInput, setTvPinInput] = useState("");
-  const [isPairingTv, setIsPairingTv] = useState(false);
-  const [isSigningIn, setIsSigningIn] = useState(false);
 
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
 
-  const handleGoogleSignIn = useCallback(async () => {
-    setIsSigningIn(true);
-    play("confirm");
-    try {
-      await signInWithGoogle();
-      Alert.alert("Signed In", "Welcome to Hallyu TV Cloud! Your Watchlist is now synced.");
-    } catch {
-      Alert.alert("Sign In Failed", "Could not complete Google Sign-In.");
-    } finally {
-      setIsSigningIn(false);
-    }
-  }, [signInWithGoogle, play]);
-
-  const handleSignOut = useCallback(async () => {
-    play("tap");
-    await signOut();
-    Alert.alert("Signed Out", "Switched back to local guest mode.");
-  }, [signOut, play]);
-
-  const handleSyncCloud = useCallback(async () => {
-    play("tap");
-    await syncCloudWatchlist();
-    Alert.alert("Cloud Sync Complete", "Your Watchlist and playback history are synced.");
-  }, [syncCloudWatchlist, play]);
-
-  const handlePairTv = useCallback(async () => {
-    if (!tvPinInput.trim()) {
-      Alert.alert("Enter PIN", "Please enter the 6-digit PIN displayed on your Android TV screen.");
-      return;
-    }
-    setIsPairingTv(true);
-    play("confirm");
-    try {
-      const res = await pairTvWithPin(tvPinInput);
-      if (res.success) {
-        setTvPinInput("");
-        Alert.alert(
-          "Android TV Connected",
-          "Your phone is now linked with your TV. Your Watchlist and playback continue seamlessly."
-        );
-      } else {
-        Alert.alert("Pairing Error", res.error || "Could not link device.");
-      }
-    } finally {
-      setIsPairingTv(false);
-    }
-  }, [tvPinInput, pairTvWithPin, play]);
-
   const handleCheckUpdate = useCallback(async () => {
     setCheckingUpdate(true);
     play("tap");
     try {
-      const res = await checkForAppUpdates();
+      const res = await checkForAppUpdates("mobile");
       setUpdateInfo(res);
-      if (!res.hasUpdate) {
-        Alert.alert("Up to Date", `You are running the latest version (v${res.currentVersion}).`);
+      if (res.hasUpdate && res.manifest) {
+        Alert.alert(
+          "Update Available",
+          `A new Hallyu Mobile version (${res.manifest.version}) is available. Would you like to install it?`
+        );
+      } else {
+        Alert.alert("Up to Date", `Hallyu Mobile (${res.currentVersion}) is on the latest version.`);
       }
+    } catch {
+      Alert.alert("Update Check Failed", "Could not check for releases right now.");
     } finally {
       setCheckingUpdate(false);
     }
   }, [play]);
 
-  const handleDownloadUpdate = useCallback(async () => {
-    if (!updateInfo?.latestRelease) return;
+  const handleInstallUpdate = useCallback(async () => {
+    if (!updateInfo?.manifest) return;
     setDownloadingUpdate(true);
+    setUpdateProgress(0);
     play("confirm");
     try {
-      const uri = await startUpdateDownload(updateInfo.latestRelease, (p) => setUpdateProgress(p));
-      if (uri) {
-        Alert.alert("Update Downloaded", "New Universal APK is ready. Tap to install.", [{ text: "Install" }]);
+      const res = await downloadAndInstallUpdate(updateInfo.manifest, (prog) => {
+        setUpdateProgress(prog);
+      });
+      if (!res.success) {
+        Alert.alert("Download Notice", res.error || "Could not complete update installation.");
       }
     } catch {
-      Alert.alert("Update Failed", "Could not download update.");
+      Alert.alert("Install Error", "Failed to launch package installer.");
     } finally {
       setDownloadingUpdate(false);
     }
   }, [updateInfo, play]);
 
-  const resumeList = progress.filter((p) => !p.completed && p.position_seconds > 5);
+  const handleClearCache = useCallback(async () => {
+    Alert.alert(
+      "Clear Cached Data",
+      "This removes temporary stream and update cache files from device storage.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            await clearOldUpdates();
+            play("confirm");
+            Alert.alert("Storage Cleaned", "Temporary cache has been cleared.");
+          },
+        },
+      ]
+    );
+  }, [play]);
+
+  const resumeList = progress;
 
   return (
     <View style={styles.root}>
-      <AmbientGlow />
 
       <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingTop: insets.top + spacing.lg,
+            paddingBottom: insets.bottom + 90,
+          },
+        ]}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingTop: insets.top + spacing.xs, paddingBottom: 110 }}
       >
-        <Text style={[styles.title, { paddingHorizontal: stage.gutter }]}>My Space</Text>
-
-        {/* Cloud Identity & Profile Card */}
-        {user ? (
-          <View style={[styles.profileCard, { marginHorizontal: stage.gutter }]}>
-            <View style={styles.avatar}>
-              <LinearGradient
-                colors={gradients.accent}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={StyleSheet.absoluteFillObject}
-              />
-              <Text style={{ color: "#FFFFFF", fontSize: 22, fontWeight: "800" }}>
-                {user.name.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.profileName}>{user.name}</Text>
-              <Text style={styles.profileEmail}>{user.email}</Text>
-              <View style={styles.badgeRow}>
-                <CheckCircle2 size={12} color="#34A853" />
-                <Text style={[styles.badgeText, { color: "#34A853" }]}>Google Account · Cloud Synced</Text>
-              </View>
-            </View>
-
-            <View style={{ gap: 8 }}>
-              <Pressable
-                onPress={handleSyncCloud}
-                disabled={isSyncing}
-                style={[styles.smallActionBtn, { backgroundColor: "rgba(255, 94, 58, 0.18)" }]}
-              >
-                {isSyncing ? (
-                  <ActivityIndicator size="small" color={palette.accentBright} />
-                ) : (
-                  <Cloud size={14} color={palette.accentBright} />
-                )}
-              </Pressable>
-              <Pressable onPress={handleSignOut} style={styles.smallActionBtn}>
-                <LogOut size={14} color={palette.textSecondary} />
-              </Pressable>
-            </View>
-          </View>
-        ) : (
-          <View
-            style={[
-              styles.profileCard,
-              {
-                marginHorizontal: stage.gutter,
-                flexDirection: "column",
-                alignItems: "stretch",
-                gap: spacing.md,
-              },
-            ]}
+        {/* Header Profile Banner */}
+        <View style={styles.profileHeader}>
+          <LinearGradient
+            colors={gradients.accent}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.avatarGlow}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-              <View style={styles.avatar}>
-                <LinearGradient
-                  colors={gradients.accent}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={StyleSheet.absoluteFillObject}
-                />
-                <ShieldCheck size={26} color="#FFFFFF" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.profileName}>Local Cinema Mode</Text>
-                <Text style={styles.profileEmail}>Private & decentralized • Sign in to sync across TV & Phone</Text>
-              </View>
+            <View style={styles.avatarInner}>
+              <HardDrive size={24} color={palette.accentBright} />
             </View>
+          </LinearGradient>
 
-            <GoogleSignInButton
-              onPress={handleGoogleSignIn}
-              loading={isSigningIn}
-              label="Sign in with Google to Sync"
-            />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={styles.profileName}>Hallyu Mobile</Text>
+            <Text style={styles.profileSub}>Independent Touch Edition · app.hallyu.mobile</Text>
           </View>
-        )}
+        </View>
 
-        {/* Android TV Pairing Section */}
-        <SectionHeading label="Android TV Device Pairing" gutter={stage.gutter} />
-        <View style={[styles.deviceRow, { marginHorizontal: stage.gutter, flexDirection: "column", alignItems: "stretch", gap: spacing.md }]}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-            <Tv size={22} color={palette.accentBright} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.deviceTitle}>Pair with Android TV</Text>
-              <Text style={styles.deviceMeta}>
-                Enter the 6-digit PIN displayed on your television to link your phone and sync your Watchlist.
-              </Text>
-            </View>
+        {/* Local Storage & Library Card */}
+        <View style={styles.statsCard}>
+          <View style={styles.statItem}>
+            <Text style={styles.statNumber}>{watchlist.length}</Text>
+            <Text style={styles.statLabel}>Watchlist</Text>
           </View>
-
-          <View style={styles.pairingInputRow}>
-            <TextInput
-              value={tvPinInput}
-              onChangeText={setTvPinInput}
-              placeholder="e.g. 749 218"
-              placeholderTextColor={palette.textMuted}
-              keyboardType="number-pad"
-              maxLength={7}
-              style={styles.pinInput}
-            />
-            <Pressable
-              onPress={handlePairTv}
-              disabled={isPairingTv}
-              style={[styles.pairBtn, isPairingTv && { opacity: 0.6 }]}
-            >
-              {isPairingTv ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={styles.pairBtnText}>Pair TV</Text>
-              )}
-            </Pressable>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statNumber}>{resumeList.length}</Text>
+            <Text style={styles.statLabel}>In Progress</Text>
           </View>
-
-          {/* List of Paired TV Devices */}
-          {pairedDevices.length > 0 ? (
-            <View style={{ gap: 8, marginTop: 4 }}>
-              <Text style={{ color: palette.textSecondary, fontSize: 11, fontWeight: "700", textTransform: "uppercase" }}>
-                Connected Devices
-              </Text>
-              {pairedDevices.map((dev) => (
-                <View key={dev.id} style={styles.pairedDeviceItem}>
-                  <Smartphone size={16} color={palette.accentBright} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>{dev.name}</Text>
-                    <Text style={{ color: palette.textMuted, fontSize: 10 }}>Linked · Watchlist Synced</Text>
-                  </View>
-                  <Pressable onPress={() => unpairDevice(dev.id)} style={{ padding: 4 }}>
-                    <Unlink size={16} color={palette.textMuted} />
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-          ) : null}
+          <View style={styles.statDivider} />
+          <Pressable style={styles.statItem} onPress={handleClearCache}>
+            <Trash2 size={20} color={palette.textSecondary} style={{ marginBottom: 4 }} />
+            <Text style={styles.statLabel}>Clean Cache</Text>
+          </Pressable>
         </View>
 
         {/* Watchlist Section */}
         <SectionHeading label="Saved to Watchlist" count={watchlist.length} gutter={stage.gutter} />
         {watchlist.length === 0 ? (
-          <Text style={[styles.emptyLine, { paddingHorizontal: stage.gutter }]}>
-            Bookmarks and saved series appear here for instant access.
+          <Text style={[styles.emptyHint, { marginHorizontal: stage.gutter }]}>
+            No saved titles yet. Tap the bookmark icon on any movie or series to save it here.
           </Text>
         ) : (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={[styles.hRow, { paddingHorizontal: stage.gutter }]}
+            contentContainerStyle={[styles.horizontalRail, { paddingHorizontal: stage.gutter }]}
           >
             {watchlist.map((item) => (
-              <WatchlistTile
+              <Pressable
                 key={item.subject_id}
-                item={item}
                 onPress={() => {
-                  if (item.detail_path)
-                    navigation.navigate("Details", { detailPath: item.detail_path, subjectId: item.subject_id });
+                  play("tap");
+                  navigation.navigate("Details", { detailPath: item.detail_path || "", subjectId: item.subject_id });
                 }}
-              />
+                style={styles.posterWrapper}
+              >
+                <Poster
+                  uri={item.poster_url}
+                  style={{ width: stage.posterWidth * 0.72, height: stage.posterHeight * 0.72, borderRadius: radius.sm }}
+                  initials={item.title.slice(0, 2).toUpperCase()}
+                />
+                <Text style={styles.posterTitle} numberOfLines={1}>
+                  {item.title}
+                </Text>
+              </Pressable>
             ))}
           </ScrollView>
         )}
 
-        {/* Resume Section */}
-        {resumeList.length > 0 ? (
+        {/* Watching History */}
+        {resumeList.length > 0 && (
           <>
             <SectionHeading label="Watching History" count={resumeList.length} gutter={stage.gutter} />
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={[styles.hRow, { paddingHorizontal: stage.gutter }]}
+              contentContainerStyle={[styles.horizontalRail, { paddingHorizontal: stage.gutter }]}
             >
               {resumeList.map((row) => (
                 <Pressable
-                  key={row.subject_id}
-                  style={styles.resumeCard}
+                  key={`${row.subject_id}-${row.season_number}-${row.episode_number}`}
                   onPress={() => {
-                    if (row.detail_path)
-                      navigation.navigate("Details", { detailPath: row.detail_path, subjectId: row.subject_id });
+                    play("tap");
+                    navigation.navigate("Details", { detailPath: row.detail_path || "", subjectId: row.subject_id });
                   }}
+                  style={styles.posterWrapper}
                 >
-                  <Poster uri={row.poster_url} style={styles.resumePoster} initials={initialsFor(row.title)} />
-                  <Text numberOfLines={1} style={styles.resumeTitle}>
+                  <Poster
+                    uri={row.poster_url}
+                    style={{ width: stage.posterWidth * 0.72, height: stage.posterHeight * 0.72, borderRadius: radius.sm }}
+                    initials={row.title.slice(0, 2).toUpperCase()}
+                  />
+                  <Text style={styles.posterTitle} numberOfLines={1}>
                     {row.title}
                   </Text>
-                  <Text style={styles.resumeMeta}>
-                    {row.media_type === "series" ? `S${row.season_number} E${row.episode_number}` : "Film"}
+                  <Text style={styles.posterSub}>
+                    {row.media_type === "series" ? `S${row.season_number} E${row.episode_number}` : "Movie"}
                   </Text>
                 </Pressable>
               ))}
             </ScrollView>
           </>
-        ) : null}
+        )}
 
-        {/* Layout & Stage Mode Selector */}
+        {/* Display Experience */}
         <SectionHeading label="Display Experience" gutter={stage.gutter} />
-        <View style={[styles.segment, { paddingHorizontal: stage.gutter }]}>
+        <View style={[styles.optionsGroup, { marginHorizontal: stage.gutter }]}>
           {DISPLAY_OPTIONS.map((opt) => {
-            const isActive = mode === opt.key;
+            const active = mode === opt.key;
             return (
               <Pressable
                 key={opt.key}
-                style={[styles.segmentBtn, isActive && styles.segmentBtnActive]}
                 onPress={() => {
-                  setMode(opt.key);
                   play("tap");
+                  setMode(opt.key);
                 }}
+                style={[styles.radioRow, active && styles.radioRowActive]}
               >
-                {isActive && (
-                  <LinearGradient
-                    colors={gradients.accent}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={StyleSheet.absoluteFillObject}
-                  />
-                )}
-                <Text style={[styles.segmentLabel, isActive && styles.segmentLabelActive]}>{opt.label}</Text>
-                <Text style={[styles.segmentHint, isActive && styles.segmentHintActive]}>{opt.hint}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.radioLabel, active && { color: palette.accentBright }]}>{opt.label}</Text>
+                  <Text style={styles.radioHint}>{opt.hint}</Text>
+                </View>
+                <View style={[styles.radioOuter, active && styles.radioOuterActive]}>
+                  {active && <View style={styles.radioInner} />}
+                </View>
               </Pressable>
             );
           })}
         </View>
 
-        {/* Spatial Audio & Haptic Feedback */}
-        <SectionHeading label="Haptics & Interface Audio" gutter={stage.gutter} />
-
-        <View style={[styles.deviceRow, { marginHorizontal: stage.gutter }]}>
-          {soundEnabled ? (
-            <Volume2 size={20} color={palette.accentBright} />
-          ) : (
-            <VolumeX size={20} color={palette.textMuted} />
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.deviceTitle}>Interface Sound FX</Text>
-            <Text style={styles.deviceMeta}>Spatial glass clicks, transport feedback and completion chimes.</Text>
-          </View>
-          <Switch
-            value={soundEnabled}
-            onValueChange={setSoundEnabled}
-            trackColor={{ false: "rgba(255,255,255,0.12)", true: palette.accent }}
-            thumbColor="#FFFFFF"
-          />
-        </View>
-
-        {soundEnabled ? (
-          <View style={[styles.sliderCard, { marginHorizontal: stage.gutter }]}>
-            <Text style={styles.deviceMeta}>Sound Effects Volume ({Math.round(volume * 100)}%)</Text>
-            <Slider
-              style={{ height: 32, marginTop: spacing.xs }}
-              minimumValue={0}
-              maximumValue={1}
-              value={volume}
-              onSlidingComplete={setVolume}
-              minimumTrackTintColor={palette.accent}
-              maximumTrackTintColor="rgba(255, 255, 255, 0.16)"
-              thumbTintColor={palette.accentBright}
+        {/* Audio & Feedback */}
+        <SectionHeading label="Interface Audio & Haptics" gutter={stage.gutter} />
+        <View style={[styles.optionsGroup, { marginHorizontal: stage.gutter }]}>
+          <View style={styles.settingRow}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              {soundEnabled ? <Volume2 size={20} color={palette.accent} /> : <VolumeX size={20} color={palette.textMuted} />}
+              <Text style={styles.settingLabel}>Navigation Sounds</Text>
+            </View>
+            <Switch
+              value={soundEnabled}
+              onValueChange={(val) => {
+                setSoundEnabled(val);
+                if (val) play("tap");
+              }}
+              trackColor={{ false: palette.surfaceRaised, true: palette.accent }}
+              thumbColor={palette.textPrimary}
             />
           </View>
-        ) : null}
 
-        <View style={[styles.deviceRow, { marginHorizontal: stage.gutter, marginTop: spacing.md }]}>
-          <Vibrate size={20} color={hapticsEnabled ? palette.accentBright : palette.textMuted} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.deviceTitle}>Liquid Haptics</Text>
-            <Text style={styles.deviceMeta}>Subtle tactile vibrations on key gestures and scrubber moves.</Text>
+          {soundEnabled && (
+            <View style={[styles.settingRow, { paddingTop: 4 }]}>
+              <Text style={styles.sliderLabel}>Volume: {Math.round(volume * 100)}%</Text>
+              <Slider
+                style={{ width: "55%", height: 36 }}
+                minimumValue={0}
+                maximumValue={1}
+                value={volume}
+                onSlidingComplete={setVolume}
+                minimumTrackTintColor={palette.accent}
+                maximumTrackTintColor={palette.surfaceRaised}
+                thumbTintColor={palette.accentBright}
+              />
+            </View>
+          )}
+
+          <View style={styles.settingRow}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <Vibrate size={20} color={hapticsEnabled ? palette.accent : palette.textMuted} />
+              <Text style={styles.settingLabel}>Haptic Feedback</Text>
+            </View>
+            <Switch
+              value={hapticsEnabled}
+              onValueChange={(val) => {
+                setHapticsEnabled(val);
+                if (val) play("tap");
+              }}
+              trackColor={{ false: palette.surfaceRaised, true: palette.accent }}
+              thumbColor={palette.textPrimary}
+            />
           </View>
-          <Switch
-            value={hapticsEnabled}
-            onValueChange={setHapticsEnabled}
-            trackColor={{ false: "rgba(255,255,255,0.12)", true: palette.accent }}
-            thumbColor="#FFFFFF"
-          />
         </View>
 
-        {/* In-App Updates & Releases */}
-        <SectionHeading label="In-App Updates & Releases" gutter={stage.gutter} />
-        <View
-          style={[
-            styles.deviceRow,
-            { marginHorizontal: stage.gutter, flexDirection: "column", alignItems: "stretch", gap: spacing.md },
-          ]}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-            <DownloadCloud size={20} color={palette.accentBright} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.deviceTitle}>Software Version</Text>
-              <Text style={styles.deviceMeta}>
-                {updateInfo?.hasUpdate
-                  ? `Update v${updateInfo.latestRelease?.version} available (Current: v${updateInfo.currentVersion})`
-                  : updateInfo
-                  ? `Latest version v${updateInfo.currentVersion} installed`
-                  : "Check for new Universal APK builds and compatibility updates."}
-              </Text>
-            </View>
+        {/* In-App Updates Section */}
+        <SectionHeading label="Hallyu Mobile In-App Updates" gutter={stage.gutter} />
+        <View style={[styles.optionsGroup, { marginHorizontal: stage.gutter }]}>
+          <View style={{ gap: 6, marginBottom: 12 }}>
+            <Text style={styles.updaterTitle}>Automatic Direct APK Releases</Text>
+            <Text style={styles.updaterDesc}>
+              Hallyu Mobile checks specifically for mobile releases with package identity app.hallyu.mobile.
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: 10 }}>
             <Pressable
               onPress={handleCheckUpdate}
               disabled={checkingUpdate || downloadingUpdate}
-              style={[styles.actionBtn, { paddingHorizontal: spacing.md, paddingVertical: spacing.sm }]}
-              accessibilityRole="button"
+              style={[styles.updaterButton, { flex: 1 }]}
             >
               {checkingUpdate ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator size="small" color={palette.accentBright} />
               ) : (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <RefreshCw size={13} color="#FFFFFF" />
-                  <Text style={styles.actionBtnText}>Check</Text>
-                </View>
+                <RefreshCw size={16} color={palette.accentBright} />
               )}
+              <Text style={styles.updaterButtonText}>Check for Updates</Text>
             </Pressable>
-          </View>
 
-          {updateInfo?.hasUpdate && updateInfo.latestRelease ? (
-            <View style={styles.updateCard}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <Text style={styles.updateBadge}>New Version {updateInfo.latestRelease.version}</Text>
-                {downloadingUpdate ? (
-                  <Text style={styles.updateProgressText}>{Math.round(updateProgress * 100)}%</Text>
-                ) : null}
-              </View>
-              {updateInfo.latestRelease.body ? (
-                <Text style={styles.updateNotes} numberOfLines={3}>
-                  {updateInfo.latestRelease.body}
-                </Text>
-              ) : null}
+            {updateInfo?.hasUpdate && updateInfo.manifest && (
               <Pressable
-                onPress={handleDownloadUpdate}
+                onPress={handleInstallUpdate}
                 disabled={downloadingUpdate}
-                style={[styles.downloadBtn, downloadingUpdate && { opacity: 0.6 }]}
-                accessibilityRole="button"
+                style={[styles.updaterButton, styles.updaterButtonAccent, { flex: 1 }]}
               >
                 {downloadingUpdate ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.downloadBtnText}>Download & Install Update</Text>
+                  <DownloadCloud size={16} color="#fff" />
                 )}
+                <Text style={[styles.updaterButtonText, { color: "#fff" }]}>
+                  {downloadingUpdate ? "Downloading..." : "Update Now"}
+                </Text>
               </Pressable>
+            )}
+          </View>
+
+          {downloadingUpdate && (
+            <View style={{ marginTop: 12, gap: 4 }}>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressFill, { width: `${Math.round(updateProgress * 100)}%` }]} />
+              </View>
+              <Text style={styles.progressText}>{Math.round(updateProgress * 100)}% downloaded</Text>
             </View>
-          ) : null}
+          )}
+
+          {updateInfo?.manifest && (
+            <View style={styles.releaseNotesBox}>
+              <Text style={styles.releaseNotesTitle}>Available: v{updateInfo.manifest.version}</Text>
+              <Text style={styles.releaseNotesBody} numberOfLines={4}>
+                {updateInfo.manifest.releaseNotes || "Performance enhancements and bug fixes."}
+              </Text>
+            </View>
+          )}
         </View>
 
-        <SectionHeading label="Hardware Independence" gutter={stage.gutter} />
-        <View style={[styles.deviceRow, { marginHorizontal: stage.gutter }]}>
-          <MonitorSmartphone size={20} color={palette.accentBright} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.deviceTitle}>Standalone Universal APK</Text>
-            <Text style={styles.deviceMeta}>
-              This single APK runs natively across Android TV and Handheld Mobile devices with shared liquid glass styling.
-            </Text>
+        {/* App Info Footer */}
+        <SectionHeading label="App Identity & Architecture" gutter={stage.gutter} />
+        <View style={[styles.optionsGroup, { marginHorizontal: stage.gutter, gap: 8 }]}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoKey}>Edition</Text>
+            <Text style={styles.infoVal}>Hallyu Mobile</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoKey}>Package ID</Text>
+            <Text style={styles.infoVal}>app.hallyu.mobile</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoKey}>Architecture</Text>
+            <Text style={styles.infoVal}>Pure Local Storage · No Cloud Accounts</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoKey}>Streaming Source</Text>
+            <Text style={styles.infoVal}>Direct Moviebox Resolver</Text>
           </View>
         </View>
       </ScrollView>
@@ -519,181 +394,161 @@ export function MySpaceScreen() {
   );
 }
 
-function WatchlistTile({ item, onPress }: { item: LibraryTitle; onPress: () => void }) {
-  const width = 110;
-  const height = Math.round((width * 3) / 2);
-  return (
-    <Pressable onPress={onPress} style={{ width }}>
-      <View style={{ width, height, borderRadius: radius.md, overflow: "hidden", backgroundColor: palette.surface }}>
-        <Poster uri={item.poster_url} style={StyleSheet.absoluteFill} initials={initialsFor(item.title)} />
-      </View>
-      <Text numberOfLines={1} style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "600", marginTop: 6 }}>
-        {item.title}
-      </Text>
-      <Text numberOfLines={1} style={{ color: palette.textMuted, fontSize: 10, marginTop: 2 }}>
-        {item.media_type === "series" ? "Series" : "Movie"}
-      </Text>
-    </Pressable>
-  );
-}
-
 function SectionHeading({ label, count, gutter }: { label: string; count?: number; gutter: number }) {
   return (
-    <View style={[styles.sectionHeading, { paddingHorizontal: gutter }]}>
-      <Text style={styles.sectionLabel}>{label}</Text>
-      {typeof count === "number" && count > 0 ? <Text style={styles.sectionCount}>{count}</Text> : null}
+    <View style={[styles.sectionHeading, { marginHorizontal: gutter }]}>
+      <Text style={styles.sectionHeadingText}>{label}</Text>
+      {count !== undefined && <Text style={styles.sectionHeadingBadge}>{count}</Text>}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
-  title: { color: "#FFFFFF", fontWeight: "800", fontSize: 24, letterSpacing: -0.6, marginBottom: spacing.md },
-  profileCard: {
+  container: { gap: spacing.md },
+  profileHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
+    marginHorizontal: spacing.lg,
+    padding: spacing.md,
     backgroundColor: palette.surfaceGlass,
-    borderColor: palette.glassStrokeBright,
-    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.card,
-    padding: spacing.lg,
-  },
-  avatar: { width: 56, height: 56, borderRadius: 28, overflow: "hidden", alignItems: "center", justifyContent: "center" },
-  profileName: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
-  profileEmail: { color: palette.textSecondary, fontSize: 12, marginTop: 2 },
-  badgeRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
-  badgeText: { color: palette.accentBright, fontSize: 11, fontWeight: "600" },
-  smallActionBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: palette.glassFillStrong,
-    borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  avatarGlow: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    padding: 2,
     alignItems: "center",
     justifyContent: "center",
   },
-  pairingInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  pinInput: {
-    flex: 1,
-    height: 48,
-    backgroundColor: "rgba(0, 0, 0, 0.4)",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: palette.glassStrokeBright,
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "700",
-    letterSpacing: 2,
-    paddingHorizontal: 16,
-  },
-  pairBtn: {
-    height: 48,
-    paddingHorizontal: 20,
-    backgroundColor: palette.accent,
-    borderRadius: radius.md,
+  avatarInner: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: palette.surface,
     alignItems: "center",
     justifyContent: "center",
   },
-  pairBtnText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  pairedDeviceItem: {
+  profileName: { color: palette.textPrimary, fontSize: 17, fontWeight: "800" },
+  profileSub: { color: palette.textMuted, fontSize: 12 },
+  statsCard: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    padding: 12,
-    backgroundColor: palette.glassFillStrong,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
+    justifyContent: "space-around",
+    marginHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: palette.surfaceGlass,
+    borderRadius: radius.card,
     borderColor: palette.glassStroke,
+    borderWidth: StyleSheet.hairlineWidth,
   },
+  statItem: { alignItems: "center", flex: 1 },
+  statNumber: { color: palette.accentBright, fontSize: 18, fontWeight: "800" },
+  statLabel: { color: palette.textSecondary, fontSize: 11, fontWeight: "600", marginTop: 2 },
+  statDivider: { width: 1, height: 28, backgroundColor: palette.glassStroke },
   sectionHeading: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
-    marginTop: spacing.xl,
-    marginBottom: spacing.md,
+    justifyContent: "space-between",
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
   },
-  sectionLabel: { color: palette.textSecondary, fontSize: 13, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5 },
-  sectionCount: { color: palette.accentBright, fontSize: 12, fontWeight: "700" },
-  emptyLine: { color: palette.textMuted, lineHeight: 19 },
-  hRow: { gap: spacing.md },
-  resumeCard: { width: 120, gap: 4 },
-  resumePoster: { width: 120, height: 72, borderRadius: radius.sm, backgroundColor: palette.surfaceRaised },
-  resumeTitle: { color: "#FFFFFF", fontSize: 12, fontWeight: "600", marginTop: 4 },
-  resumeMeta: { color: palette.textMuted, fontSize: 10 },
-  deviceRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    backgroundColor: palette.surfaceGlass,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.card,
-    padding: spacing.lg,
+  sectionHeadingText: {
+    color: palette.textPrimary,
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: -0.2,
   },
-  sliderCard: {
-    backgroundColor: palette.glassFillStrong,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.card,
-    padding: spacing.md,
-    marginTop: spacing.xs,
-  },
-  deviceTitle: { color: "#FFFFFF", fontSize: 15, fontWeight: "600" },
-  deviceMeta: { color: palette.textMuted, fontSize: 12, lineHeight: 17 },
-  segment: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs },
-  segmentBtn: {
-    flex: 1,
-    backgroundColor: palette.glassFillStrong,
-    borderColor: palette.glassStroke,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
-    alignItems: "center",
-    gap: 2,
-    overflow: "hidden",
-    position: "relative",
-  },
-  segmentBtnActive: { borderColor: palette.accentBright },
-  segmentLabel: { color: palette.textSecondary, fontSize: 13, fontWeight: "700" },
-  segmentLabelActive: { color: "#FFFFFF" },
-  segmentHint: { color: palette.textMuted, fontSize: 10 },
-  segmentHintActive: { color: "#FFFFFF" },
-  actionBtn: {
-    backgroundColor: palette.glassFillStrong,
-    borderColor: palette.glassStrokeBright,
-    borderWidth: StyleSheet.hairlineWidth,
+  sectionHeadingBadge: {
+    color: palette.accentBright,
+    fontSize: 12,
+    fontWeight: "700",
+    backgroundColor: "rgba(255, 94, 58, 0.15)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
     borderRadius: radius.pill,
   },
-  actionBtnText: { color: "#FFFFFF", fontSize: 12, fontWeight: "600" },
-  updateCard: {
-    backgroundColor: palette.glassFillStrong,
-    borderColor: palette.accentBright,
+  emptyHint: { color: palette.textMuted, fontSize: 13, lineHeight: 18 },
+  horizontalRail: { gap: spacing.sm },
+  posterWrapper: { width: 100, gap: 4 },
+  posterTitle: { color: palette.textPrimary, fontSize: 11, fontWeight: "600" },
+  posterSub: { color: palette.textMuted, fontSize: 10 },
+  optionsGroup: {
+    backgroundColor: palette.surfaceGlass,
+    borderRadius: radius.card,
+    borderColor: palette.glassStroke,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.md,
     padding: spacing.md,
     gap: spacing.sm,
   },
-  updateBadge: { color: palette.accentBright, fontSize: 13, fontWeight: "700" },
-  updateProgressText: { color: palette.textSecondary, fontSize: 12, fontWeight: "600" },
-  updateNotes: { color: palette.textSecondary, fontSize: 12, lineHeight: 17 },
-  downloadBtn: {
-    backgroundColor: palette.accent,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
+  radioRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+  },
+  radioRowActive: {},
+  radioLabel: { color: palette.textPrimary, fontSize: 14, fontWeight: "600" },
+  radioHint: { color: palette.textMuted, fontSize: 11, marginTop: 2 },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: palette.textMuted,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: spacing.xs,
   },
-  downloadBtnText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
+  radioOuterActive: { borderColor: palette.accentBright },
+  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: palette.accentBright },
+  settingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  settingLabel: { color: palette.textPrimary, fontSize: 14, fontWeight: "500" },
+  sliderLabel: { color: palette.textMuted, fontSize: 12 },
+  updaterTitle: { color: palette.textPrimary, fontSize: 14, fontWeight: "700" },
+  updaterDesc: { color: palette.textMuted, fontSize: 12, lineHeight: 16 },
+  updaterButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: palette.surface,
+    borderColor: palette.glassStrokeBright,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  updaterButtonAccent: {
+    backgroundColor: palette.accent,
+    borderColor: palette.accentBright,
+  },
+  updaterButtonText: { color: palette.accentBright, fontSize: 13, fontWeight: "700" },
+  progressBar: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: palette.surfaceRaised,
+    overflow: "hidden",
+  },
+  progressFill: { height: "100%", backgroundColor: palette.accentBright },
+  progressText: { color: palette.textMuted, fontSize: 11, textAlign: "right" },
+  releaseNotesBox: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    gap: 4,
+  },
+  releaseNotesTitle: { color: palette.accentBright, fontSize: 12, fontWeight: "700" },
+  releaseNotesBody: { color: palette.textSecondary, fontSize: 11, lineHeight: 15 },
+  infoRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  infoKey: { color: palette.textMuted, fontSize: 12 },
+  infoVal: { color: palette.textPrimary, fontSize: 12, fontWeight: "600" },
 });

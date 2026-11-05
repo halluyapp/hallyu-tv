@@ -9,7 +9,10 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "verify:provider": "bun scripts/verify-provider.mjs",
-    "test": "bun test"
+    "test": "bun test",
+    "build:mobile": "APP_VARIANT=mobile expo prebuild -p android --clean && cd android && ./gradlew assembleRelease --no-daemon",
+    "build:tv": "APP_VARIANT=tv expo prebuild -p android --clean && cd android && ./gradlew assembleRelease --no-daemon",
+    "build:android:all": "bun run build:mobile && cp android/app/build/outputs/apk/release/app-release.apk /tmp/hallyu-mobile.apk && bun run build:tv && cp android/app/build/outputs/apk/release/app-release.apk /tmp/hallyu-tv.apk"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
