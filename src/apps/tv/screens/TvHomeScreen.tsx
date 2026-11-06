@@ -2,22 +2,24 @@ import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { Check, Play, Plus, Star } from "lucide-react-native";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
+import { FlatList, StyleSheet, Text, View } from "react-native";
 import { COLLAPSED_RAIL_WIDTH } from "@/apps/tv/focus/TvSidebar";
 import type { TvStackParamList } from "@/apps/tv/navigation/tvTypes";
-import { palette, radius, spacing } from "@/design-system/tokens";
+import { palette, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
-import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
+import { prefetchDetail } from "@/services/provider/detailCache";
 import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
+import { takePrefetched } from "@/services/provider/prefetch";
 import { COMPLETION_THRESHOLD, useLibrary, type ProgressRow } from "@/state/LibraryContext";
 import type { CatalogueItem, HomeSection, TitleDetail } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassLandscapeCard } from "@/ui/glass/GlassLandscapeCard";
 import { GlassPosterCard } from "@/ui/glass/GlassPosterCard";
+import { GlassTvHomeSkeleton } from "@/ui/glass/GlassSkeleton";
+import { curateFeaturedItems, TvHeroShowcase } from "@/ui/glass/HeroShowcase";
 
 type Nav = NativeStackNavigationProp<TvStackParamList>;
 
@@ -25,11 +27,9 @@ const LEFT_CONTENT_INSET = COLLAPSED_RAIL_WIDTH + 44;
 
 /**
  * 1:1 Hallyu TV Home Screen (`docs/ui-previews/tv-01-home.png`):
- * - Full-bleed widescreen cinema hero + cached AmbientArtworkCanvas
- * - Frosted Liquid Glass metadata pills ('K-Drama Series', gold star rating, year, 'HD')
- * - Luminous pearl-to-coral 'Play' / 'Resume' capsule + frosted crystal '+ My List' capsule
- * - 16:9 Frosted Liquid Glass 'Continue Watching' rail with glowing progress bars
- * - Virtualized 2:3 cinema poster rails with 10-foot Liquid Glass focus halos
+ * - Full-bleed widescreen cinema hero stage auto-transitioning through 6 featured dramas
+ * - Virtualized vertical FlatList of rails for instant startup on budget TV sticks
+ * - 0ms instant Player navigation + D-pad focus memory when returning Back from Details
  */
 export function TvHomeScreen() {
   const navigation = useNavigation<Nav>();
@@ -41,27 +41,29 @@ export function TvHomeScreen() {
   const [sections, setSections] = useState<HomeSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [heroIndex, setHeroIndex] = useState(0);
-  const [heroDetail, setHeroDetail] = useState<TitleDetail | null>(null);
-  const [heroFocused, setHeroFocused] = useState(false);
-  const [openingPlay, setOpeningPlay] = useState(false);
+  const [heroBackdropUri, setHeroBackdropUri] = useState<string | null>(null);
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
 
   const refreshCatalogue = useCallback(async () => {
     setError(null);
+    let hadCached = false;
     const cached = await hydrateHome();
     if (cached && cached.length > 0) {
+      hadCached = true;
       setSections(cached);
+      setHeroBackdropUri((prev) => prev ?? cached[0]?.items[0]?.posterUrl ?? null);
       setLoading(false);
     }
     try {
       const fresh = await loadHome();
       if (fresh.length > 0) {
         setSections(fresh);
-      } else if (!cached) {
+        setHeroBackdropUri((prev) => prev ?? fresh[0]?.items[0]?.posterUrl ?? null);
+      } else if (!hadCached) {
         setError("No catalogue sections returned right now.");
       }
     } catch {
-      if (!cached || cached.length === 0) {
+      if (!hadCached) {
         setError("Could not reach the Hallyu streaming catalogue. Check your network and try again.");
       }
     } finally {
@@ -73,38 +75,7 @@ export function TvHomeScreen() {
     void refreshCatalogue();
   }, [refreshCatalogue]);
 
-  const heroCandidates = useMemo(() => {
-    const firstItems = sections[0]?.items ?? [];
-    return firstItems.slice(0, 6);
-  }, [sections]);
-
-  const activeHeroItem = heroCandidates[heroIndex] ?? null;
-
-  // Gentle billboard rotation ONLY when screen is focused, hero buttons aren't focused, and RAM allows
-  useEffect(() => {
-    if (!isFocused || heroFocused || heroCandidates.length <= 1 || profile.isLowRam) return;
-    const timer = setInterval(() => {
-      setHeroIndex((idx) => (idx + 1) % heroCandidates.length);
-    }, 11_000);
-    return () => clearInterval(timer);
-  }, [heroCandidates.length, heroFocused, isFocused, profile.isLowRam]);
-
-  // Fetch rich synopsis + backdrop for the featured hero
-  useEffect(() => {
-    if (!activeHeroItem?.slug) {
-      setHeroDetail(null);
-      return;
-    }
-    const controller = new AbortController();
-    fetchDetail(activeHeroItem.slug, controller.signal)
-      .then((d) => {
-        if (!controller.signal.aborted) setHeroDetail(d);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setHeroDetail(null);
-      });
-    return () => controller.abort();
-  }, [activeHeroItem?.slug]);
+  const featuredSlides = useMemo(() => curateFeaturedItems(sections, 6), [sections]);
 
   const continueWatching = useMemo(
     () =>
@@ -116,6 +87,8 @@ export function TvHomeScreen() {
 
   const openDetails = useCallback(
     (item: CatalogueItem) => {
+      setLastClickedId(item.subjectId);
+      prefetchDetail(item.slug);
       navigation.navigate("TvDetails", {
         subjectId: item.subjectId,
         detailPath: item.slug,
@@ -126,42 +99,54 @@ export function TvHomeScreen() {
     [navigation],
   );
 
-  const handlePlayHero = useCallback(async () => {
-    if (!activeHeroItem || openingPlay) return;
-    setOpeningPlay(true);
-    try {
-      const resume = latestFor(activeHeroItem.subjectId);
-      const isSeries = (heroDetail?.mediaType ?? activeHeroItem.mediaType) === "series";
-      const season = isSeries ? (resume?.season_number ?? heroDetail?.seasons[0]?.season ?? 1) : 0;
+  // 0ms Instant TV Player Launch — opens full-screen player immediately!
+  const handlePlayHero = useCallback(
+    (item: CatalogueItem, detail: TitleDetail | null) => {
+      const resume = latestFor(item.subjectId);
+      const isSeries = (detail?.mediaType ?? item.mediaType) === "series";
+      const season = isSeries ? (resume?.season_number ?? detail?.seasons[0]?.season ?? 1) : 0;
       const episode = isSeries ? (resume?.episode_number ?? 1) : 0;
-      const maxEp = heroDetail?.seasons.find((s) => s.season === season)?.maxEp ?? 0;
-      const res = await resolveStreams(activeHeroItem.subjectId, activeHeroItem.slug, season, episode);
+      const maxEp = detail?.seasons.find((s) => s.season === season)?.maxEp ?? 0;
+      const warm = takePrefetched(item.subjectId, item.slug, season, episode);
+
       navigation.navigate("TvPlayer", {
-        subjectId: activeHeroItem.subjectId,
-        detailPath: activeHeroItem.slug,
-        title: activeHeroItem.name,
-        posterUrl: activeHeroItem.posterUrl,
+        subjectId: item.subjectId,
+        detailPath: item.slug,
+        title: item.name,
+        posterUrl: item.posterUrl,
         mediaType: isSeries ? "series" : "movie",
         season,
         episode,
         maxEpisodesInSeason: maxEp,
         resumeAt: resume && !resume.completed ? resume.position_seconds : 0,
-        sources: res.sources,
-        nextEpisode: isSeries && (maxEp === 0 || episode < maxEp) ? { season, episode: episode + 1 } : null,
+        sources: warm?.sources ?? [],
+        nextEpisode:
+          isSeries && (maxEp === 0 || episode < maxEp) ? { season, episode: episode + 1 } : null,
       });
-    } catch {
-      openDetails(activeHeroItem);
-    } finally {
-      setOpeningPlay(false);
-    }
-  }, [activeHeroItem, heroDetail, latestFor, navigation, openDetails, openingPlay]);
+    },
+    [latestFor, navigation],
+  );
+
+  const handleToggleHeroWatchlist = useCallback(
+    (item: CatalogueItem) => {
+      void toggleWatchlist({
+        subject_id: item.subjectId,
+        detail_path: item.slug,
+        media_type: item.mediaType,
+        title: item.name,
+        poster_url: item.posterUrl,
+      });
+    },
+    [toggleWatchlist],
+  );
 
   const handleResumeCard = useCallback(
-    async (row: ProgressRow) => {
+    (row: ProgressRow) => {
       if (!row.detail_path) return;
       const isSeries = row.media_type === "series";
       const se = isSeries ? (row.season_number ?? 1) : 0;
       const ep = isSeries ? (row.episode_number ?? 1) : 0;
+      const warm = takePrefetched(row.subject_id, row.detail_path, se, ep);
       navigation.navigate("TvPlayer", {
         subjectId: row.subject_id,
         detailPath: row.detail_path,
@@ -171,41 +156,27 @@ export function TvHomeScreen() {
         season: se,
         episode: ep,
         resumeAt: row.position_seconds,
-        sources: [],
+        sources: warm?.sources ?? [],
         nextEpisode: isSeries ? { season: se, episode: ep + 1 } : null,
       });
     },
     [navigation],
   );
 
-  const heroArt = heroDetail?.backdropUrl ?? activeHeroItem?.posterUrl ?? null;
-  const heroSaved = activeHeroItem ? inWatchlist(activeHeroItem.subjectId) : false;
-  const heroResume = activeHeroItem ? latestFor(activeHeroItem.subjectId) : null;
-  const heroCtaLabel = openingPlay
-    ? "Opening Stream…"
-    : heroResume && !heroResume.completed
-      ? heroResume.media_type === "series"
-        ? `Resume S${heroResume.season_number ?? 1} · E${heroResume.episode_number ?? 1}`
-        : "Resume Movie"
-      : activeHeroItem?.mediaType === "series"
-        ? "Play S1 · E1"
-        : "Watch Now";
-
-  const heroRating = useMemo(() => {
-    const raw = heroDetail?.rating ?? activeHeroItem?.rating;
-    const n = raw ? parseFloat(raw) : NaN;
-    return Number.isFinite(n) && n > 0 ? n.toFixed(1) : null;
-  }, [activeHeroItem?.rating, heroDetail?.rating]);
-
-  const posterWidth = Math.max(142, Math.min(186, Math.round((stage.width - LEFT_CONTENT_INSET - 40) / 5.7)));
-  const landscapeWidth = Math.max(240, Math.min(300, Math.round((stage.width - LEFT_CONTENT_INSET - 40) / 3.6)));
+  const posterWidth = Math.max(
+    142,
+    Math.min(186, Math.round((stage.width - LEFT_CONTENT_INSET - 40) / 5.7)),
+  );
+  const landscapeWidth = Math.max(
+    240,
+    Math.min(300, Math.round((stage.width - LEFT_CONTENT_INSET - 40) / 3.6)),
+  );
 
   if (loading && sections.length === 0) {
     return (
-      <View style={styles.centerState}>
+      <View style={styles.root}>
         <AmbientArtworkCanvas intensity="subtle" />
-        <ActivityIndicator size="large" color={palette.accent} />
-        <Text style={styles.stateLabel}>Opening Hallyu TV Cinema…</Text>
+        <GlassTvHomeSkeleton posterWidth={posterWidth} leftInset={LEFT_CONTENT_INSET} />
       </View>
     );
   }
@@ -216,24 +187,36 @@ export function TvHomeScreen() {
         <AmbientArtworkCanvas intensity="subtle" />
         <Text style={styles.errorTitle}>Catalogue Unavailable</Text>
         <Text style={styles.errorBody}>{error}</Text>
-        <GlassPillButton label="Retry Connection" variant="primary" size="tv" hasTVPreferredFocus onPress={refreshCatalogue} />
+        <GlassPillButton
+          label="Retry Connection"
+          variant="primary"
+          size="tv"
+          hasTVPreferredFocus
+          onPress={refreshCatalogue}
+        />
       </View>
     );
   }
 
   return (
     <View style={styles.root}>
-      <AmbientArtworkCanvas imageUri={heroArt} intensity="rich" />
+      <AmbientArtworkCanvas imageUri={heroBackdropUri} intensity="rich" />
 
       {/* Top-right full-bleed hero artwork melting into the Liquid Glass canvas */}
-      {heroArt ? (
-        <View style={[styles.heroBackdropWrap, { height: Math.max(330, Math.round(stage.height * 0.68)) }]} pointerEvents="none">
+      {heroBackdropUri ? (
+        <View
+          style={[
+            styles.heroBackdropWrap,
+            { height: Math.max(330, Math.round(stage.height * 0.68)) },
+          ]}
+          pointerEvents="none"
+        >
           <ExpoImage
-            source={{ uri: heroArt }}
+            source={{ uri: heroBackdropUri }}
             style={StyleSheet.absoluteFill}
             contentFit="cover"
             cachePolicy="memory-disk"
-            transition={profile.imageTransitionMs}
+            transition={profile.isLowRam ? 220 : 420}
           />
           <LinearGradient
             colors={["#05080E", "rgba(5, 8, 14, 0.78)", "rgba(5, 8, 14, 0.16)"]}
@@ -250,109 +233,55 @@ export function TvHomeScreen() {
         </View>
       ) : null}
 
-      <ScrollView
+      <FlatList
+        data={sections}
+        keyExtractor={(s) => s.section}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={profile.listWindowSize}
+        removeClippedSubviews
         contentContainerStyle={[styles.scrollContent, { paddingLeft: LEFT_CONTENT_INSET }]}
-      >
-        <Text style={styles.brandWordmark}>Hallyu TV</Text>
+        ListHeaderComponent={
+          <View>
+            <Text style={styles.brandWordmark}>Hallyu TV</Text>
 
-        {/* Featured Hero Stage */}
-        {activeHeroItem ? (
-          <View style={styles.heroStage}>
-            <View style={styles.metaRow}>
-              <View style={styles.glassMetaChip}>
-                <Text style={styles.glassMetaText}>
-                  {activeHeroItem.mediaType === "series" ? "K-Drama & Series" : "Feature Film"}
-                </Text>
+            {featuredSlides.length > 0 ? (
+              <TvHeroShowcase
+                items={featuredSlides}
+                screenFocused={isFocused}
+                inWatchlist={inWatchlist}
+                latestFor={latestFor}
+                preferInitialFocus={lastClickedId === null}
+                onWatchNow={handlePlayHero}
+                onOpenDetails={openDetails}
+                onToggleWatchlist={handleToggleHeroWatchlist}
+                onHeroBackdropChange={setHeroBackdropUri}
+              />
+            ) : null}
+
+            {continueWatching.length > 0 ? (
+              <View style={styles.railBlock}>
+                <Text style={styles.railHeading}>Continue Watching</Text>
+                <ContinueWatchingRail
+                  rows={continueWatching}
+                  cardWidth={landscapeWidth}
+                  onSelect={handleResumeCard}
+                />
               </View>
-              {heroRating ? (
-                <View style={styles.glassMetaChip}>
-                  <Star size={12} color={palette.gold} fill={palette.gold} />
-                  <Text style={[styles.glassMetaText, { color: "#FFF7E0" }]}>{heroRating}</Text>
-                </View>
-              ) : null}
-              {activeHeroItem.year ? (
-                <View style={styles.glassMetaChip}>
-                  <Text style={styles.glassMetaText}>{activeHeroItem.year}</Text>
-                </View>
-              ) : null}
-              <View style={styles.glassMetaChip}>
-                <Text style={styles.glassMetaText}>HD</Text>
-              </View>
-            </View>
-
-            <Text numberOfLines={2} style={styles.heroTitle}>
-              {activeHeroItem.name.toUpperCase()}
-            </Text>
-
-            <Text numberOfLines={2} style={styles.heroSynopsis}>
-              {heroDetail?.description ??
-                "Stream full-length episodes and cinema in crisp HD with multi-language subtitles."}
-            </Text>
-
-            <View style={styles.heroCtaRow}>
-              <GlassPillButton
-                label={heroCtaLabel}
-                icon={<Play size={16} color={palette.pearlInk} fill={palette.pearlInk} />}
-                variant="primary"
-                size="tv"
-                hasTVPreferredFocus
-                onFocus={() => setHeroFocused(true)}
-                onBlur={() => setHeroFocused(false)}
-                onPress={handlePlayHero}
-              />
-              <GlassPillButton
-                label={heroSaved ? "In My List" : "+ My List"}
-                icon={heroSaved ? <Check size={16} color="#FFFFFF" /> : <Plus size={16} color="#FFFFFF" />}
-                variant="secondary"
-                size="tv"
-                onFocus={() => setHeroFocused(true)}
-                onBlur={() => setHeroFocused(false)}
-                onPress={() =>
-                  void toggleWatchlist({
-                    subject_id: activeHeroItem.subjectId,
-                    detail_path: activeHeroItem.slug,
-                    media_type: activeHeroItem.mediaType,
-                    title: activeHeroItem.name,
-                    poster_url: activeHeroItem.posterUrl,
-                  })
-                }
-              />
-              <GlassPillButton
-                label="Details & Episodes"
-                variant="secondary"
-                size="tv"
-                onFocus={() => setHeroFocused(true)}
-                onBlur={() => setHeroFocused(false)}
-                onPress={() => openDetails(activeHeroItem)}
-              />
-            </View>
+            ) : null}
           </View>
-        ) : null}
-
-        {/* Continue Watching 16:9 Frosted Liquid Glass Rail */}
-        {continueWatching.length > 0 ? (
-          <View style={styles.railBlock}>
-            <Text style={styles.railHeading}>Continue Watching</Text>
-            <ContinueWatchingRail
-              rows={continueWatching}
-              cardWidth={landscapeWidth}
-              onSelect={handleResumeCard}
-            />
-          </View>
-        ) : null}
-
-        {/* Virtualized Catalogue Rails */}
-        {sections.map((section) => (
+        }
+        renderItem={({ item: section }) => (
           <TvPosterRail
-            key={section.section}
             title={section.section}
             items={section.items}
             posterWidth={posterWidth}
+            preferredSubjectId={lastClickedId}
             onOpenItem={openDetails}
           />
-        ))}
-      </ScrollView>
+        )}
+      />
     </View>
   );
 }
@@ -367,6 +296,7 @@ const ContinueWatchingRail = memo(function ContinueWatchingRail({
   onSelect: (row: ProgressRow) => void;
 }) {
   const listRef = useRef<FlatList<ProgressRow>>(null);
+  const gap = 16;
   return (
     <FlatList
       ref={listRef}
@@ -374,9 +304,17 @@ const ContinueWatchingRail = memo(function ContinueWatchingRail({
       data={rows}
       keyExtractor={(r) => `${r.subject_id}-${r.season_number ?? 0}-${r.episode_number ?? 0}`}
       showsHorizontalScrollIndicator={false}
+      getItemLayout={(_, index) => ({
+        length: cardWidth + gap,
+        offset: (cardWidth + gap) * index,
+        index,
+      })}
       contentContainerStyle={styles.railContent}
       renderItem={({ item, index }) => {
-        const remainingMin = Math.max(1, Math.round((item.duration_seconds - item.position_seconds) / 60));
+        const remainingMin = Math.max(
+          1,
+          Math.round((item.duration_seconds - item.position_seconds) / 60),
+        );
         const sub =
           item.media_type === "series"
             ? `S${item.season_number ?? 1} · E${item.episode_number ?? 1} · ${
@@ -412,11 +350,13 @@ const TvPosterRail = memo(function TvPosterRail({
   title,
   items,
   posterWidth,
+  preferredSubjectId,
   onOpenItem,
 }: {
   title: string;
   items: CatalogueItem[];
   posterWidth: number;
+  preferredSubjectId: string | null;
   onOpenItem: (item: CatalogueItem) => void;
 }) {
   const profile = usePerformanceProfile();
@@ -447,8 +387,10 @@ const TvPosterRail = memo(function TvPosterRail({
             item={item}
             width={posterWidth}
             index={index}
+            hasTVPreferredFocus={preferredSubjectId === item.subjectId}
             onPress={onOpenItem}
-            onFocusItem={(_, idx) => {
+            onFocusItem={(focusedItem, idx) => {
+              prefetchDetail(focusedItem.slug);
               if (typeof idx === "number") {
                 listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.18 });
               }
@@ -473,11 +415,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.xxl,
     gap: 14,
-  },
-  stateLabel: {
-    color: palette.textSecondary,
-    fontSize: 15,
-    fontWeight: "600",
   },
   errorTitle: {
     color: palette.textPrimary,
@@ -508,53 +445,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: -0.5,
     marginBottom: 22,
-  },
-  heroStage: {
-    maxWidth: "58%",
-    minHeight: 205,
-    justifyContent: "flex-end",
-    marginBottom: 26,
-    gap: 12,
-  },
-  metaRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 8,
-  },
-  glassMetaChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: "rgba(18, 25, 38, 0.72)",
-    borderColor: "rgba(255, 255, 255, 0.24)",
-    borderWidth: 1,
-    borderRadius: radius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
-  glassMetaText: {
-    color: "#F3F6FA",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  heroTitle: {
-    color: "#FFFFFF",
-    fontSize: 38,
-    fontWeight: "800",
-    letterSpacing: -0.9,
-    lineHeight: 43,
-  },
-  heroSynopsis: {
-    color: palette.textSecondary,
-    fontSize: 14.5,
-    lineHeight: 21,
-  },
-  heroCtaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginTop: 4,
   },
   railBlock: {
     marginBottom: 26,

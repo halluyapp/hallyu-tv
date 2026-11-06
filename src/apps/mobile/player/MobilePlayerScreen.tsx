@@ -131,6 +131,11 @@ export function MobilePlayerScreen() {
     }, 3800);
   }, [engine.isPlaying, hideHud, hudOpacity, scrubValue, sheet]);
 
+  // Pause 4Hz scrubber React re-renders whenever the Liquid Glass HUD is hidden!
+  useEffect(() => {
+    engine.setHudActive((controlsVisible && !locked) || sheet !== null);
+  }, [controlsVisible, engine.setHudActive, locked, sheet]);
+
   useEffect(() => {
     showHud();
     return () => {

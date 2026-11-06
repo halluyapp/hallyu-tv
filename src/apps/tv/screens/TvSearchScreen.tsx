@@ -9,6 +9,7 @@ import { palette, radius } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import { searchCatalogue } from "@/services/provider/adapter";
+import { prefetchDetail } from "@/services/provider/detailCache";
 import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
 import {
   addRecentSearch,
@@ -204,7 +205,7 @@ export function TvSearchScreen() {
                     key={ch}
                     label={ch}
                     hasTVPreferredFocus={rIdx === 0 && cIdx === 0}
-                    onPress={() => appendChar(ch)}
+                    onSelectKey={appendChar}
                   />
                 ))}
               </View>
@@ -307,6 +308,7 @@ export function TvSearchScreen() {
                 width={posterWidth}
                 onPress={openDetails}
                 onFocusItem={(focused) => {
+                  prefetchDetail(focused.slug);
                   if (focused.posterUrl) setAmbientUri(focused.posterUrl);
                 }}
               />
@@ -321,11 +323,11 @@ export function TvSearchScreen() {
 const TvKeyCap = memo(function TvKeyCap({
   label,
   hasTVPreferredFocus,
-  onPress,
+  onSelectKey,
 }: {
   label: string;
   hasTVPreferredFocus?: boolean;
-  onPress: () => void;
+  onSelectKey: (ch: string) => void;
 }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -337,7 +339,7 @@ const TvKeyCap = memo(function TvKeyCap({
       hasTVPreferredFocus={hasTVPreferredFocus}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
-      onPress={onPress}
+      onPress={() => onSelectKey(label)}
       style={styles.keyWrap}
     >
       <LiquidGlassView

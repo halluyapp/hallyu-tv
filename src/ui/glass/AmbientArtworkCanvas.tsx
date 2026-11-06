@@ -12,9 +12,9 @@ interface AmbientArtworkCanvasProps {
 }
 
 /**
- * Static, disk-cached blurred cinema colour-bleed behind Liquid Glass surfaces.
- * Zero Animated.loop, zero timers, zero GPU overdraw — runs at locked 60fps even
- * on 2 GB RAM phones while giving every frosted capsule real optical colour depth.
+ * Disk-cached blurred cinema colour-bleed behind Liquid Glass surfaces.
+ * Uses Glide's native hardware cross-fade when `imageUri` transitions between
+ * Featured Hero dramas — zero JS loops, locked 60fps even on 2 GB RAM phones.
  */
 export const AmbientArtworkCanvas = memo(function AmbientArtworkCanvas({
   imageUri,
@@ -36,10 +36,9 @@ export const AmbientArtworkCanvas = memo(function AmbientArtworkCanvas({
           source={{ uri: imageUri }}
           style={styles.bleedImage}
           contentFit="cover"
-          blurRadius={profile.isLowRam ? 36 : 52}
+          blurRadius={profile.isLowRam ? 34 : 52}
           cachePolicy="memory-disk"
-          recyclingKey={`ambient:${imageUri}`}
-          transition={profile.imageTransitionMs}
+          transition={profile.isLowRam ? 240 : 500}
         />
       ) : (
         <LinearGradient

@@ -4,32 +4,35 @@ import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { ArrowLeft, Check, Download, Film, Play, Plus, Star } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
+import { FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { TvStackParamList } from "@/apps/tv/navigation/tvTypes";
 import { palette, radius, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import { downloadManager } from "@/services/downloads/manager";
-import { fetchDetail, resolveStreams } from "@/services/provider/adapter";
-import { takePrefetched } from "@/services/provider/prefetch";
+import { resolveStreams } from "@/services/provider/adapter";
+import {
+  hydrateDetail,
+  loadDetailCached,
+  peekCachedDetail,
+} from "@/services/provider/detailCache";
+import { prefetchStreams, takePrefetched } from "@/services/provider/prefetch";
 import { selectDownloadSource } from "@/services/provider/streams";
 import { COMPLETION_THRESHOLD, useLibrary } from "@/state/LibraryContext";
 import type { TitleDetail } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassLandscapeCard } from "@/ui/glass/GlassLandscapeCard";
+import { GlassSkeletonBox } from "@/ui/glass/GlassSkeleton";
 
 type Nav = NativeStackNavigationProp<TvStackParamList>;
 type DetailRoute = RouteProp<TvStackParamList, "TvDetails">;
 
 /**
  * 1:1 Hallyu TV Widescreen Title Details (`docs/ui-previews/tv-03-details.png`):
- * - Right-aligned widescreen cinema backdrop melting seamlessly into smoked glass
- * - Floating frosted glass 'Back' pill at top-left
- * - Bold display title + frosted Liquid Glass metadata pills + 3-line synopsis + Cast
- * - 4 sculpted Liquid Glass CTA capsules: 'Play / Resume Sx·Ex' (default focus),
- *   'In My List', 'Watch Trailer' (when trailerUrl exists), and 'Download MP4'
- * - Horizontal Liquid Glass Season capsules + virtualized 16:9 Frosted Liquid Glass Episode Rail
+ * - Instant 0ms SWR Detail cache + background stream & caption pre-warming
+ * - 0ms instant Player navigation on Play / Episode select
+ * - Virtualized 16:9 Frosted Liquid Glass Episode Rail with exact `getItemLayout`
  */
 export function TvDetailsScreen() {
   const route = useRoute<DetailRoute>();
@@ -39,37 +42,57 @@ export function TvDetailsScreen() {
   const { subjectId, detailPath, title: initialTitle, posterUrl: initialPoster } = route.params;
   const { inWatchlist, toggleWatchlist, resumeFor, latestFor } = useLibrary();
 
-  const [detail, setDetail] = useState<TitleDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<TitleDetail | null>(() => peekCachedDetail(detailPath));
+  const [loading, setLoading] = useState(() => !peekCachedDetail(detailPath));
   const [error, setError] = useState<string | null>(null);
   const [selectedSeason, setSelectedSeason] = useState(1);
-  const [resolvingPlay, setResolvingPlay] = useState(false);
   const [downloadToast, setDownloadToast] = useState<string | null>(null);
 
   const episodeListRef = useRef<FlatList<number>>(null);
 
-  const loadTitleDetail = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const d = await fetchDetail(detailPath);
-      setDetail(d);
+  const applySeason = useCallback(
+    (d: TitleDetail) => {
       const latest = latestFor(d.subjectId);
       if (latest?.season_number && d.seasons.some((s) => s.season === latest.season_number)) {
         setSelectedSeason(latest.season_number);
       } else if (d.seasons[0]) {
         setSelectedSeason(d.seasons[0].season);
       }
+    },
+    [latestFor],
+  );
+
+  const loadTitleDetail = useCallback(async () => {
+    setError(null);
+    let hadCached = Boolean(peekCachedDetail(detailPath));
+    if (!hadCached) {
+      const hydrated = await hydrateDetail(detailPath);
+      if (hydrated) {
+        hadCached = true;
+        setDetail(hydrated);
+        applySeason(hydrated);
+        setLoading(false);
+      }
+    } else if (detail) {
+      applySeason(detail);
+    }
+
+    try {
+      const fresh = await loadDetailCached(detailPath);
+      setDetail(fresh);
+      applySeason(fresh);
     } catch {
-      setError("Could not load details for this title. Check your connection and retry.");
+      if (!hadCached) {
+        setError("Could not load details for this title. Check your connection and retry.");
+      }
     } finally {
       setLoading(false);
     }
-  }, [detailPath, latestFor]);
+  }, [applySeason, detail, detailPath]);
 
   useEffect(() => {
     void loadTitleDetail();
-  }, [loadTitleDetail]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const effectiveId = detail?.subjectId ?? subjectId;
   const effectiveTitle = detail?.title ?? initialTitle;
@@ -84,40 +107,41 @@ export function TvDetailsScreen() {
     [detail?.seasons, selectedSeason],
   );
 
+  // Pre-warm primary Play/Resume stream + captions in the background immediately!
+  useEffect(() => {
+    if (!detail) return;
+    const se = isSeries ? (latestResume?.season_number ?? currentSeasonObj?.season ?? 1) : 0;
+    const ep = isSeries ? (latestResume?.episode_number ?? 1) : 0;
+    prefetchStreams(effectiveId, detailPath, se, ep);
+  }, [currentSeasonObj?.season, detail, detailPath, effectiveId, isSeries, latestResume]);
+
   const episodeNumbers = useMemo(() => {
     const count = currentSeasonObj?.maxEp ?? 0;
     return Array.from({ length: count }, (_, idx) => idx + 1);
   }, [currentSeasonObj]);
 
+  // 0ms Instant Player Navigation — opens TvPlayer immediately without button stall
   const startPlayback = useCallback(
-    async (seasonNum: number, episodeNum: number, resumeSeconds = 0) => {
-      if (resolvingPlay) return;
-      setResolvingPlay(true);
+    (seasonNum: number, episodeNum: number, resumeSeconds = 0) => {
       setDownloadToast(null);
-      try {
-        const prefetched = takePrefetched(effectiveId, detailPath, seasonNum, episodeNum);
-        const res = prefetched ?? (await resolveStreams(effectiveId, detailPath, seasonNum, episodeNum));
-        const maxEp = detail?.seasons.find((s) => s.season === seasonNum)?.maxEp ?? 0;
-        navigation.navigate("TvPlayer", {
-          subjectId: effectiveId,
-          detailPath,
-          title: effectiveTitle,
-          posterUrl: effectivePoster,
-          mediaType: isSeries ? "series" : "movie",
-          season: seasonNum,
-          episode: episodeNum,
-          maxEpisodesInSeason: maxEp,
-          resumeAt: resumeSeconds,
-          sources: res.sources,
-          nextEpisode: isSeries && episodeNum < maxEp ? { season: seasonNum, episode: episodeNum + 1 } : null,
-        });
-      } catch (err) {
-        setDownloadToast(err instanceof Error ? err.message : "No playable stream is available right now.");
-      } finally {
-        setResolvingPlay(false);
-      }
+      const prefetched = takePrefetched(effectiveId, detailPath, seasonNum, episodeNum);
+      const maxEp = detail?.seasons.find((s) => s.season === seasonNum)?.maxEp ?? 0;
+      navigation.navigate("TvPlayer", {
+        subjectId: effectiveId,
+        detailPath,
+        title: effectiveTitle,
+        posterUrl: effectivePoster,
+        mediaType: isSeries ? "series" : "movie",
+        season: seasonNum,
+        episode: episodeNum,
+        maxEpisodesInSeason: maxEp,
+        resumeAt: resumeSeconds,
+        sources: prefetched?.sources ?? [],
+        nextEpisode:
+          isSeries && episodeNum < maxEp ? { season: seasonNum, episode: episodeNum + 1 } : null,
+      });
     },
-    [detail?.seasons, detailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation, resolvingPlay],
+    [detail?.seasons, detailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
   );
 
   const handlePrimaryPlay = useCallback(() => {
@@ -125,10 +149,10 @@ export function TvDetailsScreen() {
       const se = latestResume?.season_number ?? currentSeasonObj?.season ?? 1;
       const ep = latestResume?.episode_number ?? 1;
       const resumeAt = latestResume && !latestResume.completed ? latestResume.position_seconds : 0;
-      void startPlayback(se, ep, resumeAt);
+      startPlayback(se, ep, resumeAt);
     } else {
       const resumeAt = latestResume && !latestResume.completed ? latestResume.position_seconds : 0;
-      void startPlayback(0, 0, resumeAt);
+      startPlayback(0, 0, resumeAt);
     }
   }, [currentSeasonObj?.season, isSeries, latestResume, startPlayback]);
 
@@ -168,7 +192,8 @@ export function TvDetailsScreen() {
     setDownloadToast("Resolving progressive MP4 download…");
     try {
       const res = await resolveStreams(effectiveId, detailPath, se, ep);
-      const mp4 = selectDownloadSource(res.sources, "720p") ?? selectDownloadSource(res.sources, null);
+      const mp4 =
+        selectDownloadSource(res.sources, "720p") ?? selectDownloadSource(res.sources, null);
       if (!mp4) {
         setDownloadToast("No progressive MP4 source available for offline download.");
         return;
@@ -185,7 +210,9 @@ export function TvDetailsScreen() {
         expectedBytes: mp4.sizeBytes,
       });
       setDownloadToast(
-        isSeries ? `Queued S${se} · E${ep} for offline download.` : "Queued movie for offline download.",
+        isSeries
+          ? `Queued S${se} · E${ep} for offline download.`
+          : "Queued movie for offline download.",
       );
     } catch {
       setDownloadToast("Could not queue download. Check your connection and try again.");
@@ -197,9 +224,8 @@ export function TvDetailsScreen() {
     return Number.isFinite(n) && n > 0 ? n.toFixed(1) : null;
   }, [detail?.rating]);
 
-  const primaryLabel = resolvingPlay
-    ? "Preparing Stream…"
-    : latestResume && !latestResume.completed
+  const primaryLabel =
+    latestResume && !latestResume.completed
       ? isSeries
         ? `Resume S${latestResume.season_number ?? 1} · E${latestResume.episode_number ?? 1}`
         : "Resume Movie"
@@ -211,10 +237,31 @@ export function TvDetailsScreen() {
 
   if (loading && !detail) {
     return (
-      <View style={styles.center}>
+      <View style={styles.root}>
         <AmbientArtworkCanvas imageUri={initialPoster} intensity="medium" />
-        <ActivityIndicator size="large" color={palette.accent} />
-        <Text style={styles.loadingText}>Loading {initialTitle}…</Text>
+        <View style={styles.scrollContent}>
+          <GlassPillButton
+            label="Back"
+            icon={<ArrowLeft size={15} color="#FFFFFF" />}
+            variant="secondary"
+            size="sm"
+            onPress={() => navigation.goBack()}
+          />
+          <View style={{ marginTop: 26, gap: 14 }}>
+            <GlassSkeletonBox width={440} height={46} borderRadius={12} />
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <GlassSkeletonBox width={110} height={28} borderRadius={999} />
+              <GlassSkeletonBox width={70} height={28} borderRadius={999} />
+              <GlassSkeletonBox width={80} height={28} borderRadius={999} />
+            </View>
+            <GlassSkeletonBox width={540} height={64} borderRadius={14} />
+            <View style={{ flexDirection: "row", gap: 12, marginTop: 6 }}>
+              <GlassSkeletonBox width={180} height={48} borderRadius={999} />
+              <GlassSkeletonBox width={150} height={48} borderRadius={999} />
+              <GlassSkeletonBox width={170} height={48} borderRadius={999} />
+            </View>
+          </View>
+        </View>
       </View>
     );
   }
@@ -226,8 +273,19 @@ export function TvDetailsScreen() {
         <Text style={styles.errorTitle}>Unable to Open Title</Text>
         <Text style={styles.errorSub}>{error}</Text>
         <View style={{ flexDirection: "row", gap: 12 }}>
-          <GlassPillButton label="Retry" variant="primary" size="tv" hasTVPreferredFocus onPress={loadTitleDetail} />
-          <GlassPillButton label="Back" variant="secondary" size="tv" onPress={() => navigation.goBack()} />
+          <GlassPillButton
+            label="Retry"
+            variant="primary"
+            size="tv"
+            hasTVPreferredFocus
+            onPress={loadTitleDetail}
+          />
+          <GlassPillButton
+            label="Back"
+            variant="secondary"
+            size="tv"
+            onPress={() => navigation.goBack()}
+          />
         </View>
       </View>
     );
@@ -239,7 +297,10 @@ export function TvDetailsScreen() {
 
       {/* Right/Top Widescreen Backdrop Artwork */}
       {backdropUri ? (
-        <View style={[styles.backdropWrap, { height: Math.round(stage.height * 0.72) }]} pointerEvents="none">
+        <View
+          style={[styles.backdropWrap, { height: Math.round(stage.height * 0.72) }]}
+          pointerEvents="none"
+        >
           <ExpoImage
             source={{ uri: backdropUri }}
             style={StyleSheet.absoluteFill}
@@ -284,7 +345,9 @@ export function TvDetailsScreen() {
             <View style={styles.metaPill}>
               <Text style={styles.metaPillText}>
                 {isSeries
-                  ? `Series · ${detail?.seasons.length ?? 1} Season${(detail?.seasons.length ?? 1) > 1 ? "s" : ""}`
+                  ? `Series · ${detail?.seasons.length ?? 1} Season${
+                      (detail?.seasons.length ?? 1) > 1 ? "s" : ""
+                    }`
                   : "Movie"}
               </Text>
             </View>
@@ -307,7 +370,11 @@ export function TvDetailsScreen() {
             {detail?.genre ? (
               <View style={styles.metaPill}>
                 <Text style={styles.metaPillText}>
-                  {detail.genre.split(",").slice(0, 2).map((g) => g.trim()).join(" · ")}
+                  {detail.genre
+                    .split(",")
+                    .slice(0, 2)
+                    .map((g) => g.trim())
+                    .join(" · ")}
                 </Text>
               </View>
             ) : null}
@@ -329,11 +396,10 @@ export function TvDetailsScreen() {
           <View style={styles.ctaRow}>
             <GlassPillButton
               label={primaryLabel}
-              icon={<Play size={16} color={palette.pearlInk} fill={palette.pearlInk} />}
+              icon={<Play size={16} color="#FFFFFF" fill="#FFFFFF" />}
               variant="primary"
               size="tv"
               hasTVPreferredFocus
-              disabled={resolvingPlay}
               onPress={handlePrimaryPlay}
             />
             <GlassPillButton
@@ -418,7 +484,10 @@ export function TvDetailsScreen() {
                 const statusLabel = row?.completed
                   ? "Watched"
                   : row && row.position_seconds > 10
-                    ? `${Math.max(1, Math.round((row.duration_seconds - row.position_seconds) / 60))}m left`
+                    ? `${Math.max(
+                        1,
+                        Math.round((row.duration_seconds - row.position_seconds) / 60),
+                      )}m left`
                     : "HD";
                 return (
                   <GlassLandscapeCard
@@ -429,10 +498,15 @@ export function TvDetailsScreen() {
                     progress={pct >= COMPLETION_THRESHOLD ? 1 : pct}
                     width={episodeCardWidth}
                     onFocusCard={() => {
-                      episodeListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.2 });
+                      prefetchStreams(effectiveId, detailPath, selectedSeason, epNum);
+                      episodeListRef.current?.scrollToIndex({
+                        index,
+                        animated: true,
+                        viewPosition: 0.2,
+                      });
                     }}
                     onPress={() =>
-                      void startPlayback(
+                      startPlayback(
                         selectedSeason,
                         epNum,
                         row && !row.completed ? row.position_seconds : 0,
@@ -463,13 +537,8 @@ const styles = StyleSheet.create({
     padding: spacing.xxl,
     gap: 14,
   },
-  loadingText: {
-    color: palette.textSecondary,
-    fontSize: 15,
-    fontWeight: "600",
-  },
   errorTitle: {
-    color: palette.textPrimary,
+    color: "#FFFFFF",
     fontSize: 22,
     fontWeight: "800",
   },
@@ -478,33 +547,33 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     maxWidth: 460,
-    marginBottom: 8,
   },
   backdropWrap: {
     position: "absolute",
     top: 0,
     right: 0,
-    left: "22%",
+    left: "20%",
   },
   scrollContent: {
-    paddingHorizontal: 42,
-    paddingTop: 22,
-    paddingBottom: 48,
+    paddingHorizontal: 44,
+    paddingTop: 26,
+    paddingBottom: 56,
   },
   topRow: {
     flexDirection: "row",
-    marginBottom: 22,
+    alignItems: "center",
+    marginBottom: 18,
   },
   infoBlock: {
-    maxWidth: "62%",
+    maxWidth: "60%",
     gap: 12,
   },
   title: {
     color: "#FFFFFF",
-    fontSize: 38,
+    fontSize: 40,
     fontWeight: "800",
-    letterSpacing: -0.9,
-    lineHeight: 43,
+    letterSpacing: -1,
+    lineHeight: 45,
   },
   metaPills: {
     flexDirection: "row",
@@ -516,7 +585,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    backgroundColor: "rgba(18, 25, 38, 0.72)",
+    backgroundColor: "rgba(18, 25, 38, 0.75)",
     borderColor: "rgba(255, 255, 255, 0.24)",
     borderWidth: 1,
     borderRadius: radius.pill,
@@ -536,7 +605,6 @@ const styles = StyleSheet.create({
   castLine: {
     color: palette.textMuted,
     fontSize: 13,
-    fontWeight: "500",
   },
   ctaRow: {
     flexDirection: "row",
@@ -552,17 +620,18 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   episodesSection: {
-    marginTop: 28,
-    gap: 14,
+    marginTop: 32,
+    gap: 16,
   },
   seasonRow: {
     flexDirection: "row",
     flexWrap: "wrap",
+    alignItems: "center",
     gap: 10,
   },
   episodeRail: {
     gap: 16,
     paddingVertical: 8,
-    paddingRight: 28,
+    paddingRight: 32,
   },
 });

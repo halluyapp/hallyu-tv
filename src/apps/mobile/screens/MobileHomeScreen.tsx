@@ -1,11 +1,13 @@
 import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
-import { type CompositeNavigationProp, useNavigation } from "@react-navigation/native";
+import {
+  type CompositeNavigationProp,
+  useIsFocused,
+  useNavigation,
+} from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Image as ExpoImage } from "expo-image";
-import { Check, ChevronRight, Play, Plus, Search, Star } from "lucide-react-native";
+import { ChevronRight, Search } from "lucide-react-native";
 import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
@@ -21,15 +23,19 @@ import { BRAND_WORDMARK } from "@/config/branding";
 import { palette, radius } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
-import { resolveStreams } from "@/services/provider/adapter";
 import type { WorldId } from "@/services/provider/categories";
+import { prefetchDetail } from "@/services/provider/detailCache";
 import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
+import { takePrefetched } from "@/services/provider/prefetch";
+import { useSound } from "@/services/sound/SoundContext";
 import { COMPLETION_THRESHOLD, useLibrary, type ProgressRow } from "@/state/LibraryContext";
-import type { CatalogueItem, HomeSection } from "@/types/provider";
+import type { CatalogueItem, HomeSection, TitleDetail } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassLandscapeCard } from "@/ui/glass/GlassLandscapeCard";
 import { GlassPosterCard } from "@/ui/glass/GlassPosterCard";
+import { GlassMobileHomeSkeleton } from "@/ui/glass/GlassSkeleton";
+import { curateFeaturedItems, MobileHeroShowcase } from "@/ui/glass/HeroShowcase";
 import { LiquidGlassView } from "@/ui/glass/LiquidGlassView";
 
 type HomeNav = CompositeNavigationProp<
@@ -47,16 +53,17 @@ const QUICK_PILLS: { id: "all" | WorldId; label: string }[] = [
 
 /**
  * 1:1 Hallyu Mobile Home Screen (`docs/ui-previews/mobile-01-home.png`):
- * - 'HALLYU' wordmark + coral dot on left, Frosted Liquid Glass Search pill on right
- * - Quick Liquid Glass category capsules ('All' pearl-glass active pill, 'K-Drama', 'Series', 'Movies', 'Anime')
- * - Rounded 28px Featured Cinema Hero Card with embedded Frosted Liquid Glass overlay card
- * - 16:9 'Continue Watching' rail + virtualized 3-across poster rails tuned for 2 GB RAM
+ * - Virtualized vertical FlatList of rails for instant launch on 2 GB RAM phones
+ * - Auto-Transitioning 6-Drama Liquid Glass Featured Hero Showcase (swipe + pill dots)
+ * - 0ms instant Player navigation + SWR Detail prefetching
  */
 export function MobileHomeScreen() {
   const navigation = useNavigation<HomeNav>();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const stage = useStage();
   const profile = usePerformanceProfile();
+  const { play } = useSound();
   const { progress, inWatchlist, toggleWatchlist, latestFor } = useLibrary();
 
   const [sections, setSections] = useState<HomeSection[]>([]);
@@ -64,35 +71,42 @@ export function MobileHomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activePill, setActivePill] = useState<"all" | WorldId>("all");
-  const [openingHero, setOpeningHero] = useState(false);
+  const [ambientPosterUri, setAmbientPosterUri] = useState<string | null>(null);
 
   const loadCatalogue = useCallback(async (isPull = false) => {
     if (isPull) setRefreshing(true);
     setError(null);
+    let hadCached = false;
     if (!isPull) {
       const cached = await hydrateHome();
       if (cached && cached.length > 0) {
+        hadCached = true;
         setSections(cached);
+        setAmbientPosterUri((prev) => prev ?? cached[0]?.items[0]?.posterUrl ?? null);
         setLoading(false);
       }
     }
     try {
       const fresh = await loadHome();
-      if (fresh.length > 0) setSections(fresh);
-      else if (sections.length === 0) setError("No catalogue sections returned.");
+      if (fresh.length > 0) {
+        setSections(fresh);
+        setAmbientPosterUri((prev) => prev ?? fresh[0]?.items[0]?.posterUrl ?? null);
+      } else if (!hadCached) {
+        setError("No catalogue sections returned.");
+      }
     } catch {
-      if (sections.length === 0) {
+      if (!hadCached) {
         setError("Could not reach the Hallyu catalogue. Check your connection and retry.");
       }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [sections.length]);
+  }, []);
 
   useEffect(() => {
     void loadCatalogue(false);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadCatalogue]);
 
   const filteredSections = useMemo(() => {
     if (activePill === "all") return sections;
@@ -117,8 +131,8 @@ export function MobileHomeScreen() {
     return sections;
   }, [activePill, sections]);
 
-  const heroItem = useMemo(
-    () => filteredSections[0]?.items[0] ?? sections[0]?.items[0] ?? null,
+  const featuredSlides = useMemo(
+    () => curateFeaturedItems(filteredSections.length > 0 ? filteredSections : sections, 6),
     [filteredSections, sections],
   );
 
@@ -129,6 +143,7 @@ export function MobileHomeScreen() {
 
   const openDetails = useCallback(
     (item: CatalogueItem) => {
+      prefetchDetail(item.slug);
       navigation.navigate("MobileDetails", {
         subjectId: item.subjectId,
         detailPath: item.slug,
@@ -139,33 +154,46 @@ export function MobileHomeScreen() {
     [navigation],
   );
 
-  const handleWatchHero = useCallback(async () => {
-    if (!heroItem || openingHero) return;
-    setOpeningHero(true);
-    try {
-      const resume = latestFor(heroItem.subjectId);
-      const isSeries = heroItem.mediaType === "series";
-      const se = isSeries ? (resume?.season_number ?? 1) : 0;
+  // 0ms Instant Player Navigation — uses pre-warmed stream if ready or resolves inside Player!
+  const handleWatchHero = useCallback(
+    (item: CatalogueItem, detail: TitleDetail | null) => {
+      const resume = latestFor(item.subjectId);
+      const isSeries = (detail?.mediaType ?? item.mediaType) === "series";
+      const se = isSeries ? (resume?.season_number ?? detail?.seasons[0]?.season ?? 1) : 0;
       const ep = isSeries ? (resume?.episode_number ?? 1) : 0;
-      const res = await resolveStreams(heroItem.subjectId, heroItem.slug, se, ep);
+      const maxEp = detail?.seasons.find((s) => s.season === se)?.maxEp ?? 0;
+      const warm = takePrefetched(item.subjectId, item.slug, se, ep);
+
       navigation.navigate("MobilePlayer", {
-        subjectId: heroItem.subjectId,
-        detailPath: heroItem.slug,
-        title: heroItem.name,
-        posterUrl: heroItem.posterUrl,
-        mediaType: heroItem.mediaType,
+        subjectId: item.subjectId,
+        detailPath: item.slug,
+        title: item.name,
+        posterUrl: item.posterUrl,
+        mediaType: isSeries ? "series" : "movie",
         season: se,
         episode: ep,
+        maxEpisodesInSeason: maxEp,
         resumeAt: resume && !resume.completed ? resume.position_seconds : 0,
-        sources: res.sources,
-        nextEpisode: isSeries ? { season: se, episode: ep + 1 } : null,
+        sources: warm?.sources ?? [],
+        nextEpisode: isSeries && (maxEp === 0 || ep < maxEp) ? { season: se, episode: ep + 1 } : null,
       });
-    } catch {
-      openDetails(heroItem);
-    } finally {
-      setOpeningHero(false);
-    }
-  }, [heroItem, latestFor, navigation, openDetails, openingHero]);
+    },
+    [latestFor, navigation],
+  );
+
+  const handleToggleHeroWatchlist = useCallback(
+    (item: CatalogueItem) => {
+      play("confirm", { intensity: 0.4 });
+      void toggleWatchlist({
+        subject_id: item.subjectId,
+        detail_path: item.slug,
+        media_type: item.mediaType,
+        title: item.name,
+        poster_url: item.posterUrl,
+      });
+    },
+    [play, toggleWatchlist],
+  );
 
   const handleResumeRow = useCallback(
     (row: ProgressRow) => {
@@ -173,6 +201,7 @@ export function MobileHomeScreen() {
       const isSeries = row.media_type === "series";
       const se = isSeries ? (row.season_number ?? 1) : 0;
       const ep = isSeries ? (row.episode_number ?? 1) : 0;
+      const warm = takePrefetched(row.subject_id, row.detail_path, se, ep);
       navigation.navigate("MobilePlayer", {
         subjectId: row.subject_id,
         detailPath: row.detail_path,
@@ -182,27 +211,33 @@ export function MobileHomeScreen() {
         season: se,
         episode: ep,
         resumeAt: row.position_seconds,
-        sources: [],
+        sources: warm?.sources ?? [],
         nextEpisode: isSeries ? { season: se, episode: ep + 1 } : null,
       });
     },
     [navigation],
   );
 
-  const posterWidth = Math.max(102, Math.floor((stage.width - 36 - 20) / 3));
+  const posterWidth = Math.max(102, Math.floor((stage.width - 36 - 22) / 3));
   const continueWidth = Math.min(252, Math.round(stage.width * 0.62));
-  const heroSaved = heroItem ? inWatchlist(heroItem.subjectId) : false;
-  const heroRating = useMemo(() => {
-    const n = heroItem?.rating ? parseFloat(heroItem.rating) : NaN;
-    return Number.isFinite(n) && n > 0 ? n.toFixed(1) : null;
-  }, [heroItem?.rating]);
+  const heroHeight = Math.min(410, Math.round(stage.width * 1.02));
+  const onShowExplore = useCallback(() => navigation.navigate("Explore"), [navigation]);
 
   return (
     <View style={styles.root}>
-      <AmbientArtworkCanvas imageUri={heroItem?.posterUrl} intensity="rich" />
+      <AmbientArtworkCanvas
+        imageUri={ambientPosterUri ?? featuredSlides[0]?.posterUrl}
+        intensity="rich"
+      />
 
-      <ScrollView
+      <FlatList
+        data={loading && sections.length === 0 ? [] : filteredSections}
+        keyExtractor={(sec) => sec.section}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={profile.listWindowSize}
+        removeClippedSubviews
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -210,213 +245,163 @@ export function MobileHomeScreen() {
             tintColor={palette.accent}
           />
         }
-        contentContainerStyle={[
-          styles.scrollContent,
-          {
-            paddingTop: insets.top + 10,
-            paddingBottom: insets.bottom + MOBILE_TAB_BAR_CLEARANCE,
-          },
-        ]}
-      >
-        {/* Header: HALLYU + coral dot & Frosted Liquid Glass Search Pill */}
-        <View style={styles.topHeader}>
-          <View style={styles.brandRow}>
-            <Text style={styles.wordmark}>{BRAND_WORDMARK}</Text>
-            <View style={styles.brandDot} />
-          </View>
+        contentContainerStyle={{
+          paddingTop: insets.top + 10,
+          paddingBottom: insets.bottom + MOBILE_TAB_BAR_CLEARANCE,
+          gap: 18,
+        }}
+        ListHeaderComponent={
+          <View style={styles.headerStack}>
+            {/* Header: HALLYU + coral dot & Frosted Liquid Glass Search Pill */}
+            <View style={styles.topHeader}>
+              <View style={styles.brandRow}>
+                <Text style={styles.wordmark}>{BRAND_WORDMARK}</Text>
+                <View style={styles.brandDot} />
+              </View>
 
-          <Pressable
-            accessible
-            accessibilityRole="search"
-            accessibilityLabel="Search dramas, movies and anime"
-            onPress={() => navigation.navigate("Explore", { autoFocusSearch: true })}
-            style={styles.searchPillFlex}
-          >
-            <LiquidGlassView
-              variant="frosted"
-              borderRadius={radius.pill}
-              contentStyle={styles.searchPillInner}
-            >
-              <Text numberOfLines={1} style={styles.searchPlaceholder}>
-                Search dramas, movies…
-              </Text>
-              <Search size={16} color={palette.textSecondary} />
-            </LiquidGlassView>
-          </Pressable>
-        </View>
-
-        {/* Quick Liquid Glass Category Capsules */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.pillsRow}
-        >
-          {QUICK_PILLS.map((pill) => (
-            <GlassPillButton
-              key={pill.id}
-              label={pill.label}
-              size="sm"
-              variant={activePill === pill.id ? "pearl" : "secondary"}
-              active={activePill === pill.id}
-              onPress={() => {
-                if (pill.id === "anime") {
-                  navigation.navigate("Explore", { initialWorld: "anime" });
-                } else {
-                  setActivePill(pill.id);
-                }
-              }}
-            />
-          ))}
-        </ScrollView>
-
-        {loading && sections.length === 0 ? (
-          <View style={styles.centerBox}>
-            <ActivityIndicator size="large" color={palette.accent} />
-            <Text style={styles.stateText}>Loading cinema & dramas…</Text>
-          </View>
-        ) : error && sections.length === 0 ? (
-          <View style={styles.centerBox}>
-            <Text style={styles.errorTitle}>Connection Issue</Text>
-            <Text style={styles.stateText}>{error}</Text>
-            <GlassPillButton label="Retry" variant="primary" onPress={() => void loadCatalogue(false)} />
-          </View>
-        ) : (
-          <>
-            {/* Featured Cinema Hero Card with Embedded Frosted Liquid Glass Overlay Card */}
-            {heroItem ? (
               <Pressable
                 accessible
-                accessibilityRole="button"
-                accessibilityLabel={`Featured: ${heroItem.name}`}
-                onPress={() => openDetails(heroItem)}
-                style={styles.heroOuter}
+                accessibilityRole="search"
+                accessibilityLabel="Search dramas, movies and anime"
+                onPress={() => navigation.navigate("Explore", { autoFocusSearch: true })}
+                style={styles.searchPillFlex}
               >
-                <View style={[styles.heroCard, { height: Math.min(410, Math.round(stage.width * 1.02)) }]}>
-                  {heroItem.posterUrl ? (
-                    <ExpoImage
-                      source={{ uri: heroItem.posterUrl }}
-                      style={StyleSheet.absoluteFill}
-                      contentFit="cover"
-                      cachePolicy="memory-disk"
-                      transition={profile.imageTransitionMs}
-                    />
-                  ) : null}
-
-                  <View style={styles.heroGlassPad}>
-                    <LiquidGlassView
-                      variant="frosted"
-                      borderRadius={22}
-                      blurIntensity={42}
-                      contentStyle={styles.heroGlassInner}
-                    >
-                      <View style={styles.heroMetaRow}>
-                        <View style={styles.heroChip}>
-                          <Text style={styles.heroChipText}>
-                            {heroItem.mediaType === "series" ? "K-Drama & Series" : "Feature Film"}
-                          </Text>
-                        </View>
-                        {heroRating ? (
-                          <View style={styles.heroChip}>
-                            <Star size={11} color={palette.gold} fill={palette.gold} />
-                            <Text style={[styles.heroChipText, { color: "#FFF7E0" }]}>{heroRating}</Text>
-                          </View>
-                        ) : null}
-                        {heroItem.year ? (
-                          <View style={styles.heroChip}>
-                            <Text style={styles.heroChipText}>{heroItem.year}</Text>
-                          </View>
-                        ) : null}
-                      </View>
-
-                      <Text numberOfLines={2} style={styles.heroTitle}>
-                        {heroItem.name.toUpperCase()}
-                      </Text>
-
-                      <View style={styles.heroButtonsRow}>
-                        <GlassPillButton
-                          label={openingHero ? "Opening…" : "Watch Now"}
-                          icon={<Play size={14} color="#FFFFFF" fill="#FFFFFF" />}
-                          variant="primary"
-                          size="md"
-                          onPress={handleWatchHero}
-                          style={{ flex: 1 }}
-                        />
-                        <GlassPillButton
-                          label={heroSaved ? "Saved" : "+ My List"}
-                          icon={heroSaved ? <Check size={14} color="#FFFFFF" /> : <Plus size={14} color="#FFFFFF" />}
-                          variant="secondary"
-                          size="md"
-                          onPress={() =>
-                            void toggleWatchlist({
-                              subject_id: heroItem.subjectId,
-                              detail_path: heroItem.slug,
-                              media_type: heroItem.mediaType,
-                              title: heroItem.name,
-                              poster_url: heroItem.posterUrl,
-                            })
-                          }
-                          style={{ flex: 1 }}
-                        />
-                      </View>
-                    </LiquidGlassView>
-                  </View>
-                </View>
+                <LiquidGlassView
+                  variant="frosted"
+                  borderRadius={radius.pill}
+                  contentStyle={styles.searchPillInner}
+                >
+                  <Text numberOfLines={1} style={styles.searchPlaceholder}>
+                    Search dramas, movies…
+                  </Text>
+                  <Search size={16} color={palette.textSecondary} />
+                </LiquidGlassView>
               </Pressable>
-            ) : null}
+            </View>
 
-            {/* Continue Watching 16:9 Glass-Rimmed Rail */}
-            {continueWatching.length > 0 ? (
-              <View style={styles.sectionWrap}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Continue Watching</Text>
-                </View>
-                <FlatList
-                  horizontal
-                  data={continueWatching}
-                  keyExtractor={(r) => `${r.subject_id}-${r.season_number ?? 0}-${r.episode_number ?? 0}`}
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.railPad}
-                  renderItem={({ item }) => {
-                    const pct =
-                      item.duration_seconds > 0
-                        ? Math.min(COMPLETION_THRESHOLD, item.position_seconds / item.duration_seconds)
-                        : 0.25;
-                    const rightMeta =
-                      item.media_type === "series" ? `Ep. ${item.episode_number ?? 1}` : "Movie";
-                    const rem =
-                      item.duration_seconds > 0
-                        ? `${Math.max(1, Math.round((item.duration_seconds - item.position_seconds) / 60))}m left`
-                        : "Resume";
-                    return (
-                      <GlassLandscapeCard
-                        title={item.title}
-                        subtitle={rem}
-                        rightMeta={rightMeta}
-                        imageUri={item.poster_url}
-                        progress={pct}
-                        width={continueWidth}
-                        onPress={() => handleResumeRow(item)}
-                      />
-                    );
+            {/* Quick Liquid Glass Category Capsules */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.pillsRow}
+            >
+              {QUICK_PILLS.map((pill) => (
+                <GlassPillButton
+                  key={pill.id}
+                  label={pill.label}
+                  size="sm"
+                  variant={activePill === pill.id ? "pearl" : "secondary"}
+                  active={activePill === pill.id}
+                  onPress={() => {
+                    if (pill.id === "anime") {
+                      navigation.navigate("Explore", { initialWorld: "anime" });
+                    } else {
+                      setActivePill(pill.id);
+                    }
                   }}
                 />
-              </View>
-            ) : null}
+              ))}
+            </ScrollView>
 
-            {/* Virtualized Catalogue Rails */}
-            {filteredSections.map((sec) => (
-              <MobilePosterRail
-                key={sec.section}
-                title={sec.section}
-                items={sec.items}
-                posterWidth={posterWidth}
-                onOpen={openDetails}
-                onShowAll={() => navigation.navigate("Explore")}
-              />
-            ))}
-          </>
+            {loading && sections.length === 0 ? (
+              <GlassMobileHomeSkeleton posterWidth={posterWidth} />
+            ) : error && sections.length === 0 ? (
+              <View style={styles.centerBox}>
+                <Text style={styles.errorTitle}>Connection Issue</Text>
+                <Text style={styles.stateText}>{error}</Text>
+                <GlassPillButton
+                  label="Retry"
+                  variant="primary"
+                  onPress={() => void loadCatalogue(false)}
+                />
+              </View>
+            ) : (
+              <>
+                {/* Auto-Transitioning 6-Drama Liquid Glass Featured Hero Showcase */}
+                {featuredSlides.length > 0 ? (
+                  <MobileHeroShowcase
+                    items={featuredSlides}
+                    cardHeight={heroHeight}
+                    screenFocused={isFocused}
+                    inWatchlist={inWatchlist}
+                    latestFor={latestFor}
+                    onWatchNow={handleWatchHero}
+                    onOpenDetails={openDetails}
+                    onToggleWatchlist={handleToggleHeroWatchlist}
+                    onActivePosterChange={setAmbientPosterUri}
+                  />
+                ) : null}
+
+                {/* Continue Watching 16:9 Glass-Rimmed Rail */}
+                {continueWatching.length > 0 ? (
+                  <View style={styles.sectionWrap}>
+                    <View style={styles.sectionHeader}>
+                      <Text style={styles.sectionTitle}>Continue Watching</Text>
+                    </View>
+                    <FlatList
+                      horizontal
+                      data={continueWatching}
+                      keyExtractor={(r) =>
+                        `${r.subject_id}-${r.season_number ?? 0}-${r.episode_number ?? 0}`
+                      }
+                      showsHorizontalScrollIndicator={false}
+                      initialNumToRender={3}
+                      maxToRenderPerBatch={4}
+                      windowSize={profile.listWindowSize}
+                      getItemLayout={(_, index) => ({
+                        length: continueWidth + 11,
+                        offset: (continueWidth + 11) * index,
+                        index,
+                      })}
+                      contentContainerStyle={styles.railPad}
+                      renderItem={({ item }) => {
+                        const pct =
+                          item.duration_seconds > 0
+                            ? Math.min(
+                                COMPLETION_THRESHOLD,
+                                item.position_seconds / item.duration_seconds,
+                              )
+                            : 0.25;
+                        const rightMeta =
+                          item.media_type === "series"
+                            ? `Ep. ${item.episode_number ?? 1}`
+                            : "Movie";
+                        const rem =
+                          item.duration_seconds > 0
+                            ? `${Math.max(
+                                1,
+                                Math.round((item.duration_seconds - item.position_seconds) / 60),
+                              )}m left`
+                            : "Resume";
+                        return (
+                          <GlassLandscapeCard
+                            title={item.title}
+                            subtitle={rem}
+                            rightMeta={rightMeta}
+                            imageUri={item.poster_url}
+                            progress={pct}
+                            width={continueWidth}
+                            onPress={() => handleResumeRow(item)}
+                          />
+                        );
+                      }}
+                    />
+                  </View>
+                ) : null}
+              </>
+            )}
+          </View>
+        }
+        renderItem={({ item: sec }) => (
+          <MobilePosterRail
+            title={sec.section}
+            items={sec.items}
+            posterWidth={posterWidth}
+            onOpen={openDetails}
+            onShowAll={onShowExplore}
+          />
         )}
-      </ScrollView>
+      />
     </View>
   );
 }
@@ -435,6 +420,8 @@ const MobilePosterRail = memo(function MobilePosterRail({
   onShowAll: () => void;
 }) {
   const profile = usePerformanceProfile();
+  const gap = 11;
+
   return (
     <View style={styles.sectionWrap}>
       <View style={styles.sectionHeader}>
@@ -456,6 +443,11 @@ const MobilePosterRail = memo(function MobilePosterRail({
         maxToRenderPerBatch={profile.maxToRenderPerBatch}
         initialNumToRender={4}
         removeClippedSubviews
+        getItemLayout={(_, index) => ({
+          length: posterWidth + gap,
+          offset: (posterWidth + gap) * index,
+          index,
+        })}
         contentContainerStyle={styles.railPad}
         renderItem={({ item }) => (
           <GlassPosterCard item={item} width={posterWidth} onPress={onOpen} />
@@ -470,7 +462,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: palette.background,
   },
-  scrollContent: {
+  headerStack: {
     gap: 18,
   },
   topHeader: {
@@ -534,59 +526,6 @@ const styles = StyleSheet.create({
     color: palette.textSecondary,
     fontSize: 13.5,
     textAlign: "center",
-  },
-  heroOuter: {
-    paddingHorizontal: 18,
-  },
-  heroCard: {
-    borderRadius: 28,
-    overflow: "hidden",
-    backgroundColor: palette.surfaceRaised,
-    borderColor: palette.glassStrokeBright,
-    borderWidth: 1,
-    justifyContent: "flex-end",
-  },
-  heroGlassPad: {
-    padding: 12,
-  },
-  heroGlassInner: {
-    padding: 15,
-    gap: 10,
-  },
-  heroMetaRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 6,
-  },
-  heroChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "rgba(10, 14, 22, 0.56)",
-    borderColor: "rgba(255, 255, 255, 0.24)",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: radius.pill,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  heroChipText: {
-    color: "#F4F7FB",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  heroTitle: {
-    color: "#FFFFFF",
-    fontSize: 22,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-    lineHeight: 26,
-  },
-  heroButtonsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 2,
   },
   sectionWrap: {
     gap: 10,

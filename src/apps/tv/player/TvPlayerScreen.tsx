@@ -119,6 +119,11 @@ export function TvPlayerScreen() {
     };
   }, [revealDock]);
 
+  // Pause 4Hz scrubber React re-renders whenever the Liquid Glass dock is hidden!
+  useEffect(() => {
+    engine.setHudActive(dockVisible || activeSheet !== null);
+  }, [activeSheet, dockVisible, engine.setHudActive]);
+
   // Reset auto-hide timer whenever Playing state changes
   useEffect(() => {
     if (dockVisible && engine.isPlaying && activeSheet === null) {
@@ -154,12 +159,22 @@ export function TvPlayerScreen() {
         flashToast(engine.isPlaying ? "Paused" : "Playing");
         return;
       }
-      if (eventType === "rewind") {
+      if (eventType === "play") {
+        if (!engine.isPlaying) engine.togglePlay();
+        flashToast("Playing");
+        return;
+      }
+      if (eventType === "pause" || eventType === "stop") {
+        if (engine.isPlaying) engine.togglePlay();
+        flashToast("Paused");
+        return;
+      }
+      if (eventType === "rewind" || eventType === "skipBackward") {
         engine.skipBy(-10);
         flashToast("−10s");
         return;
       }
-      if (eventType === "fastForward") {
+      if (eventType === "fastForward" || eventType === "skipForward") {
         engine.skipBy(10);
         flashToast("+10s");
         return;

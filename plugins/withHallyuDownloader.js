@@ -377,7 +377,7 @@ function patchReleaseSigningSource(src) {
     const before = out.slice(0, buildTypesIdx);
     const after = out.slice(buildTypesIdx).replace(
       /(release\s*\{[\s\S]*?)signingConfig\s+signingConfigs\.debug/,
-      `$1signingConfig (${hasReleaseEnvExpr} ? signingConfigs.release : signingConfigs.debug)`,
+      `$1ndk { abiFilters "armeabi-v7a", "arm64-v8a" }\n            signingConfig (${hasReleaseEnvExpr} ? signingConfigs.release : signingConfigs.debug)`,
     );
     out = before + after;
   }

@@ -24,32 +24,37 @@ export const PROVIDER_MEDIA_HEADERS: Record<string, string> = {
   Origin: "https://moviebox.ph",
 };
 
-const API_TIMEOUT_MS = 15_000;
+const FAST_FIRST_TIMEOUT_MS = 8_500;
+const RETRY_TIMEOUT_MS = 12_500;
 const MAX_RETRIES = 2;
 
+/** Deduplicates identical concurrent un-aborted GET calls across UI components. */
+const inflightRequests = new Map<string, Promise<unknown>>();
+
 function backoff(attempt: number): number {
-  return Math.min(1000 * 2 ** attempt, 4000) + Math.random() * 300;
+  return Math.min(700 * 2 ** attempt, 2800) + Math.random() * 220;
 }
 
 function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-export async function providerFetch(
+async function executeProviderFetch(
   path: string,
-  opts: { timeoutMs?: number; retries?: number; signal?: AbortSignal } = {},
+  opts: { timeoutMs?: number; retries?: number; signal?: AbortSignal },
 ): Promise<unknown> {
-  const { timeoutMs = API_TIMEOUT_MS, retries = MAX_RETRIES, signal } = opts;
+  const { timeoutMs, retries = MAX_RETRIES, signal } = opts;
   let lastError: Error = new ProviderError("network", "Network request failed");
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (signal?.aborted) throw new ProviderError("network", "Request cancelled");
+    const attemptTimeout = timeoutMs ?? (attempt === 0 ? FAST_FIRST_TIMEOUT_MS : RETRY_TIMEOUT_MS);
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, timeoutMs);
+    }, attemptTimeout);
     const onAbort = () => controller.abort();
     signal?.addEventListener("abort", onAbort);
 
@@ -92,4 +97,21 @@ export async function providerFetch(
     }
   }
   throw lastError;
+}
+
+export async function providerFetch(
+  path: string,
+  opts: { timeoutMs?: number; retries?: number; signal?: AbortSignal } = {},
+): Promise<unknown> {
+  if (opts.signal) {
+    return executeProviderFetch(path, opts);
+  }
+  const existing = inflightRequests.get(path);
+  if (existing) return existing;
+
+  const pending = executeProviderFetch(path, opts).finally(() => {
+    inflightRequests.delete(path);
+  });
+  inflightRequests.set(path, pending);
+  return pending;
 }

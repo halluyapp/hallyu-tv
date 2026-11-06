@@ -27,6 +27,7 @@ import {
   WORLD_DEFINITIONS,
   type WorldId,
 } from "@/services/provider/categories";
+import { prefetchDetail } from "@/services/provider/detailCache";
 import {
   addRecentSearch,
   clearRecentSearches,
@@ -37,6 +38,7 @@ import type { CatalogueItem } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassPosterCard } from "@/ui/glass/GlassPosterCard";
+import { GlassPosterGridSkeleton } from "@/ui/glass/GlassSkeleton";
 import { LiquidGlassView } from "@/ui/glass/LiquidGlassView";
 
 type ExploreNav = CompositeNavigationProp<
@@ -189,6 +191,7 @@ export function MobileExploreScreen() {
 
   const openItem = useCallback(
     (item: CatalogueItem) => {
+      prefetchDetail(item.slug);
       if (query.trim().length >= 2) {
         addRecentSearch(query.trim()).then(setRecent).catch(() => {});
       }
@@ -201,6 +204,8 @@ export function MobileExploreScreen() {
     },
     [navigation, query],
   );
+
+  const rowHeight = Math.round((posterWidth * 3) / 2) + 52;
 
   return (
     <View style={styles.root}>
@@ -216,6 +221,11 @@ export function MobileExploreScreen() {
         maxToRenderPerBatch={profile.maxToRenderPerBatch * 2}
         initialNumToRender={9}
         removeClippedSubviews
+        getItemLayout={(_, index) => ({
+          length: rowHeight,
+          offset: rowHeight * Math.floor(index / 3),
+          index,
+        })}
         onEndReachedThreshold={0.45}
         onEndReached={loadNextPage}
         columnWrapperStyle={styles.gridRow}
@@ -316,10 +326,7 @@ export function MobileExploreScreen() {
         }
         ListEmptyComponent={
           loading ? (
-            <View style={styles.emptyBox}>
-              <ActivityIndicator size="large" color={palette.accent} />
-              <Text style={styles.emptyText}>Searching catalogue…</Text>
-            </View>
+            <GlassPosterGridSkeleton columns={3} posterWidth={posterWidth} rows={2} horizontalPadding={18} />
           ) : error ? (
             <View style={styles.emptyBox}>
               <Text style={styles.emptyTitle}>Connection Issue</Text>

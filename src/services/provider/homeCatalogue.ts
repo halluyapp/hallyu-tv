@@ -1,5 +1,5 @@
 import { hydrateCache, writeCache } from "@/services/cache/swr";
-import type { HomeSection } from "@/types/provider";
+import type { CatalogueItem, HomeSection } from "@/types/provider";
 import { fetchHome } from "./adapter";
 
 /**
@@ -23,4 +23,23 @@ export async function hydrateHome(): Promise<HomeSection[] | null> {
   if (!entry) return null;
   if (!Array.isArray(entry.value) || entry.value.length === 0) return null;
   return entry.value;
+}
+
+/**
+ * Curates up to `maxSlides` distinct, poster-backed Featured Dramas & Cinema
+ * titles from the top Home sections for the auto-transitioning Hero Showcase.
+ */
+export function curateFeaturedItems(sections: HomeSection[], maxSlides = 6): CatalogueItem[] {
+  const out: CatalogueItem[] = [];
+  const seen = new Set<string>();
+
+  for (const section of sections) {
+    for (const item of section.items) {
+      if (seen.has(item.subjectId) || !item.posterUrl) continue;
+      seen.add(item.subjectId);
+      out.push(item);
+      if (out.length >= maxSlides) return out;
+    }
+  }
+  return out;
 }

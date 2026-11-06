@@ -33,6 +33,8 @@ import {
   upsertProgress,
 } from "@/services/localLibrary";
 import { MOBILE_EXPLORE_WORLDS, WORLD_DEFINITIONS, type WorldId } from "@/services/provider/categories";
+import { providerFetch } from "@/services/provider/client";
+import { curateFeaturedItems } from "@/services/provider/homeCatalogue";
 import { selectPreferredSource } from "@/services/provider/streams";
 import {
   addRecentSearch,
@@ -245,11 +247,103 @@ describe("Dual-APK Optical Liquid Glass Architecture", () => {
     expect(downloaderPlugin).toContain(".hallyu.updateprovider");
     expect(downloaderPlugin).toContain("hallyu_update_paths");
     expect(downloaderPlugin).toContain('removePrefix("file://")');
+    expect(downloaderPlugin).toContain('abiFilters "armeabi-v7a", "arm64-v8a"');
 
     const appConfig = readFileSync(join(ROOT, "app.config.js"), "utf8");
     expect(appConfig).toContain("android.permission.REQUEST_INSTALL_PACKAGES");
 
     const tvPlugin = readFileSync(join(ROOT, "plugins/withAndroidTvSupport.js"), "utf8");
     expect(tvPlugin).toContain("@drawable/tv_banner");
+  });
+
+  test("curateFeaturedItems picks distinct poster-backed dramas across sections for Hero rotation", () => {
+    const curated = curateFeaturedItems(
+      [
+        {
+          section: "Trending K-Drama",
+          items: [
+            {
+              subjectId: "1",
+              name: "Moving",
+              slug: "moving",
+              posterUrl: "https://cdn.example.com/1.jpg",
+              badge: null,
+              rating: "8.9",
+              year: "2023",
+              genre: "Action",
+              mediaType: "series",
+            },
+            {
+              subjectId: "2",
+              name: "Missing Poster",
+              slug: "missing",
+              posterUrl: null,
+              badge: null,
+              rating: null,
+              year: null,
+              genre: null,
+              mediaType: "series",
+            },
+          ],
+        },
+        {
+          section: "Top Cinema",
+          items: [
+            {
+              subjectId: "1",
+              name: "Moving Duplicate",
+              slug: "moving",
+              posterUrl: "https://cdn.example.com/1.jpg",
+              badge: null,
+              rating: "8.9",
+              year: "2023",
+              genre: "Action",
+              mediaType: "series",
+            },
+            {
+              subjectId: "3",
+              name: "Exhuma",
+              slug: "exhuma",
+              posterUrl: "https://cdn.example.com/3.jpg",
+              badge: null,
+              rating: "8.1",
+              year: "2024",
+              genre: "Thriller",
+              mediaType: "movie",
+            },
+          ],
+        },
+      ],
+      6,
+    );
+
+    expect(curated.map((c) => c.subjectId)).toEqual(["1", "3"]);
+  });
+
+  test("providerFetch deduplicates concurrent identical requests into one network call", async () => {
+    const orig = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      await new Promise((r) => setTimeout(r, 25));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const [a, b, c] = await Promise.all([
+        providerFetch("/detail/moving", { retries: 0 }),
+        providerFetch("/detail/moving", { retries: 0 }),
+        providerFetch("/detail/moving", { retries: 0 }),
+      ]);
+      expect(calls).toBe(1);
+      expect(a).toEqual({ ok: true });
+      expect(b).toEqual({ ok: true });
+      expect(c).toEqual({ ok: true });
+    } finally {
+      globalThis.fetch = orig;
+    }
   });
 });

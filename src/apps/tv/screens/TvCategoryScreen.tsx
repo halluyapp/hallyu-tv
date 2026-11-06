@@ -15,10 +15,12 @@ import {
   type SubFilterId,
   type WorldId,
 } from "@/services/provider/categories";
+import { prefetchDetail } from "@/services/provider/detailCache";
 import type { CatalogueItem } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassPosterCard } from "@/ui/glass/GlassPosterCard";
+import { GlassPosterGridSkeleton } from "@/ui/glass/GlassSkeleton";
 
 type Nav = NativeStackNavigationProp<TvStackParamList>;
 
@@ -49,6 +51,7 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focusedPosterUri, setFocusedPosterUri] = useState<string | null>(null);
+  const [lastClickedId, setLastClickedId] = useState<string | null>(null);
 
   const reqSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -128,6 +131,8 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
 
   const openDetails = useCallback(
     (item: CatalogueItem) => {
+      setLastClickedId(item.subjectId);
+      prefetchDetail(item.slug);
       navigation.navigate("TvDetails", {
         subjectId: item.subjectId,
         detailPath: item.slug,
@@ -137,6 +142,8 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
     },
     [navigation],
   );
+
+  const rowHeight = Math.round((posterWidth * 3) / 2) + 56;
 
   return (
     <View style={styles.root}>
@@ -151,6 +158,11 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
         maxToRenderPerBatch={profile.maxToRenderPerBatch * 2}
         initialNumToRender={10}
         removeClippedSubviews
+        getItemLayout={(_, index) => ({
+          length: rowHeight,
+          offset: rowHeight * Math.floor(index / NUM_COLUMNS),
+          index,
+        })}
         onEndReachedThreshold={0.5}
         onEndReached={fetchNextPage}
         contentContainerStyle={[styles.gridContent, { paddingLeft: LEFT_INSET }]}
@@ -167,7 +179,7 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
                   variant={subFilter === filter.id ? "pearl" : "secondary"}
                   active={subFilter === filter.id}
                   size="md"
-                  hasTVPreferredFocus={idx === 0}
+                  hasTVPreferredFocus={idx === 0 && lastClickedId === null}
                   onPress={() => setSubFilter(filter.id)}
                 />
               ))}
@@ -176,10 +188,7 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
         }
         ListEmptyComponent={
           loading ? (
-            <View style={styles.emptyBox}>
-              <ActivityIndicator size="large" color={palette.accent} />
-              <Text style={styles.emptyText}>Loading {world.label}…</Text>
-            </View>
+            <GlassPosterGridSkeleton columns={NUM_COLUMNS} posterWidth={posterWidth} rows={2} horizontalPadding={0} />
           ) : error ? (
             <View style={styles.emptyBox}>
               <Text style={styles.emptyTitle}>Connection Problem</Text>
@@ -206,8 +215,10 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
             <GlassPosterCard
               item={item}
               width={posterWidth}
+              hasTVPreferredFocus={lastClickedId === item.subjectId}
               onPress={openDetails}
               onFocusItem={(focused) => {
+                prefetchDetail(focused.slug);
                 if (focused.posterUrl) setFocusedPosterUri(focused.posterUrl);
               }}
             />

@@ -9,7 +9,7 @@ import { classifyPlayerError, playerErrorMessage, type PlayerErrorKind } from "@
 import { pickAdaptiveSource, shouldDownshift } from "@/services/player/playbackPolicy";
 import { fetchCaptions, fetchCaptionText, resolveStreams } from "@/services/provider/adapter";
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
-import { prefetchStreams } from "@/services/provider/prefetch";
+import { prefetchStreams, takePrefetchedCaptions } from "@/services/provider/prefetch";
 import {
   pickRecoverySource,
   qualityOptions,
@@ -95,7 +95,9 @@ export function usePlaybackEngine(
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [failMessage, setFailMessage] = useState<string | null>(null);
 
-  const [tracks, setTracks] = useState<CaptionTrack[] | null>(null);
+  const [tracks, setTracks] = useState<CaptionTrack[] | null>(() =>
+    isTrailer ? null : takePrefetchedCaptions(subjectId, detailPath, season, episode),
+  );
   const [tracksLoading, setTracksLoading] = useState(false);
   const [tracksError, setTracksError] = useState<string | null>(null);
   const [activeTrack, setActiveTrack] = useState<CaptionTrack | null>(null);
@@ -121,8 +123,11 @@ export function usePlaybackEngine(
   const [nativeSubtitleId, setNativeSubtitleId] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
+  const hudActiveRef = useRef(true);
   const positionRef = useRef(Math.max(0, resumeAt));
+  const bufferedRef = useRef(0);
   const durationRef = useRef(0);
+  const currentCueRef = useRef<Cue | null>(null);
   const rateRef = useRef(rate);
   rateRef.current = rate;
   const sourceRef = useRef<StreamSource | null>(source);
@@ -151,7 +156,7 @@ export function usePlaybackEngine(
   const initialVideoSource = useMemo(() => (source ? videoSourceFor(source) : null), []); // eslint-disable-line react-hooks/exhaustive-deps
   const player = useVideoPlayer(initialVideoSource, (p) => {
     p.timeUpdateEventInterval = 0.25;
-    p.bufferOptions = { preferredForwardBufferDuration: 24, minBufferForPlayback: 2 };
+    p.bufferOptions = { preferredForwardBufferDuration: 18, minBufferForPlayback: 1.5 };
     p.currentTime = Math.max(0, resumeAt);
     if (initialVideoSource) {
       p.playbackRate = 1;
@@ -267,13 +272,15 @@ export function usePlaybackEngine(
     subtitleOptOutRef.current = prefs.preferredSubtitleLang === "off";
     setNextCountdown(null);
     setAvailableSources(sources);
-    setTracks(null);
+    setTracks(isTrailer ? null : takePrefetchedCaptions(subjectId, detailPath, season, episode));
     setActiveTrack(null);
     setCues([]);
+    currentCueRef.current = null;
     setCurrentCue(null);
     setTracksError(null);
     setPosition(Math.max(0, resumeAt));
     positionRef.current = Math.max(0, resumeAt);
+    bufferedRef.current = 0;
     durationRef.current = 0;
     setDuration(0);
 
@@ -353,16 +360,61 @@ export function usePlaybackEngine(
     return () => clearTimeout(t);
   }, [buffering, recover, status]);
 
-  // Time & progress persistence
+  const setHudActive = useCallback((visible: boolean) => {
+    hudActiveRef.current = visible;
+    if (visible) {
+      setPosition(positionRef.current);
+      setBufferedPosition(bufferedRef.current);
+      if (durationRef.current > 0) {
+        setDuration(durationRef.current);
+      }
+    }
+  }, []);
+
+  // Time & progress persistence (skips 4Hz scrubber React re-renders while HUD dock is hidden!)
   useEffect(() => {
-    const t = timeEvent?.currentTime ?? position;
+    const t = timeEvent?.currentTime ?? positionRef.current;
+    const b = Math.max(0, timeEvent?.bufferedPosition ?? 0);
     const d = player.duration;
     positionRef.current = t;
-    if (d > 0) durationRef.current = d;
-    setPosition(t);
-    setBufferedPosition(Math.max(0, timeEvent?.bufferedPosition ?? 0));
-    if (d > 0) setDuration(d);
-    setCurrentCue(activeTrack ? cueAt(cues, t * 1000, subtitleOffset * 1000) : null);
+    bufferedRef.current = b;
+    if (d > 0 && d !== durationRef.current) {
+      durationRef.current = d;
+      setDuration(d);
+    }
+
+    if (hudActiveRef.current) {
+      setPosition(t);
+      setBufferedPosition(b);
+    }
+
+    const nextCue = activeTrack ? cueAt(cues, t * 1000, subtitleOffset * 1000) : null;
+    if (
+      nextCue?.startMs !== currentCueRef.current?.startMs ||
+      nextCue?.text !== currentCueRef.current?.text
+    ) {
+      currentCueRef.current = nextCue;
+      setCurrentCue(nextCue);
+    }
+
+    // Warm next episode stream + captions at 80% even when HUD is hidden
+    if (!isTrailer && nextEpisode && d > 0 && t / d >= 0.8) {
+      prefetchStreams(subjectId, detailPath, nextEpisode.season, nextEpisode.episode);
+    }
+
+    // Trigger next-episode countdown at 95% even when HUD is hidden
+    if (
+      !isTrailer &&
+      prefs.autoPlayNext &&
+      nextEpisode &&
+      onNavigateEpisode &&
+      status === "ready" &&
+      d > 0 &&
+      !autoNextCancelledRef.current &&
+      t / d >= 0.95
+    ) {
+      setNextCountdown((prev) => (prev === null ? 8 : prev));
+    }
 
     if (!isTrailer && t > 0 && Math.abs(t - lastSavedRef.current) >= 10) {
       lastSavedRef.current = t;
@@ -379,7 +431,7 @@ export function usePlaybackEngine(
         completed: d > 0 && t / d >= COMPLETION_THRESHOLD,
       });
     }
-  }, [timeEvent, player, activeTrack, cues, subtitleOffset, isTrailer, subjectId, detailPath, mediaType, title, posterUrl, season, episode, saveProgress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [timeEvent, player, activeTrack, cues, subtitleOffset, isTrailer, subjectId, detailPath, mediaType, title, posterUrl, season, episode, saveProgress, nextEpisode, prefs.autoPlayNext, onNavigateEpisode, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeTrack) {
@@ -439,7 +491,12 @@ export function usePlaybackEngine(
   }, [pipActive, player]);
 
   const loadCaptions = useCallback(async () => {
-    if (isTrailer || tracks !== null || tracksLoading) return;
+    if (isTrailer || tracks !== null || tracksLoading || !detailPath) return;
+    const warm = takePrefetchedCaptions(subjectId, detailPath, season, episode);
+    if (warm) {
+      setTracks(warm);
+      return;
+    }
     setTracksLoading(true);
     setTracksError(null);
     captionAbortRef.current?.abort();
@@ -606,12 +663,12 @@ export function usePlaybackEngine(
     recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
     const current = sourceRef.current;
     const at = positionRef.current;
-    if (!current) {
-      showError("format", "No playable source is available.");
+    if (current && (isOfflineUri(current.url) || isTrailer)) {
+      void applySource(current, at);
       return;
     }
-    if (isOfflineUri(current.url) || isTrailer) {
-      void applySource(current, at);
+    if (!detailPath) {
+      showError("format", "No playable source is available.");
       return;
     }
     setStatus("loading");
@@ -620,8 +677,9 @@ export function usePlaybackEngine(
         const res = await resolveStreams(subjectId, detailPath, season, episode);
         setAvailableSources(res.sources);
         const picked =
-          selectPreferredSource(res.sources, (current.resolution as any) ?? prefs.preferredQuality, IS_TV) ??
-          selectPreferredSource(res.sources, prefs.preferredQuality, IS_TV);
+          (current?.resolution
+            ? selectPreferredSource(res.sources, current.resolution as any, IS_TV)
+            : null) ?? selectPreferredSource(res.sources, prefs.preferredQuality, IS_TV);
         if (!picked) throw new Error("No playable source returned");
         await applySource(picked, at);
       } catch (err) {
@@ -703,6 +761,7 @@ export function usePlaybackEngine(
     seekTo,
     skipBy,
     setPlaybackRate,
+    setHudActive,
     switchSource,
     retry,
     saveExitSnapshot,
