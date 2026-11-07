@@ -130,23 +130,27 @@ export function SoundProvider({ children }: { children: ReactNode }) {
 
   const play = useCallback(
     (name: SoundName, options?: PlayOptions) => {
-      if (!enabledRef.current) return;
-      try {
-        const p = getPlayer(name);
-        if (!p) return;
-        const intensity = options?.intensity;
-        const base = BASE_VOLUME[name] * volumeRef.current;
-        p.volume = typeof intensity === "number" ? Math.min(1, Math.max(0, base * intensity)) : base;
-        p.seekTo(0);
-        p.play();
-      } catch {
-        // Sound must never break an interaction.
-      }
-      // Paired haptic — a separate preference, skipped on TV (no tactile surface).
-      if (!Platform.isTV && hapticsRef.current) {
-        const haptic = HAPTIC_TONE[name];
-        if (haptic) haptic().catch(() => {});
-      }
+      // Defer JNI ExoPlayer seek/play & haptics off the critical touch/D-pad frame so UI responds in 0ms!
+      setTimeout(() => {
+        if (enabledRef.current) {
+          try {
+            const p = getPlayer(name);
+            if (p) {
+              const intensity = options?.intensity;
+              const base = BASE_VOLUME[name] * volumeRef.current;
+              p.volume = typeof intensity === "number" ? Math.min(1, Math.max(0, base * intensity)) : base;
+              p.seekTo(0);
+              p.play();
+            }
+          } catch {
+            // Sound must never break an interaction.
+          }
+        }
+        if (!Platform.isTV && hapticsRef.current) {
+          const haptic = HAPTIC_TONE[name];
+          if (haptic) haptic().catch(() => {});
+        }
+      }, 0);
     },
     [getPlayer],
   );

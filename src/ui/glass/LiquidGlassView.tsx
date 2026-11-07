@@ -28,12 +28,11 @@ interface LiquidGlassViewProps {
 /**
  * Core Optical Liquid Glass surface matching the approved tvOS 26 / iOS 26
  * design language 1-to-1:
- * - Floating docks/modals (`dock`, `frosted`) apply real optical BlurView on
- *   standard/high-RAM devices and gracefully switch to high-clarity smoked
- *   crystal refraction on 2 GB RAM devices so frame rate stays locked at 60fps.
- * - List cells (`card`) never allocate per-cell BlurView render targets.
- * - Every surface receives a diagonal glass sheen + razor-sharp 1px top
- *   specular rim highlight.
+ * - On Android phones & TVs, avoids `dimezisBlurView` (which re-draws the entire
+ *   view hierarchy into an offscreen Canvas on every `onPreDraw` scroll frame!)
+ *   and instead renders zero-cost GPU-composited smoked crystal refraction +
+ *   multi-stop diagonal glass sheen + 1px top specular rim highlight.
+ * - On iOS, leverages OS-composited `UIVisualEffectView` on floating docks.
  */
 export const LiquidGlassView = memo(function LiquidGlassView({
   children,
@@ -46,7 +45,9 @@ export const LiquidGlassView = memo(function LiquidGlassView({
 }: LiquidGlassViewProps) {
   const profile = usePerformanceProfile();
   const shouldUseLiveBlur =
-    profile.allowLiveBlur && (variant === "dock" || variant === "frosted");
+    Platform.OS === "ios" &&
+    profile.allowLiveBlur &&
+    (variant === "dock" || variant === "frosted");
 
   const borderColor = focused
     ? "#FFF6EE"
@@ -89,7 +90,6 @@ export const LiquidGlassView = memo(function LiquidGlassView({
           <BlurView
             intensity={blurIntensity}
             tint="dark"
-            experimentalBlurMethod={Platform.OS === "android" ? "dimezisBlurView" : undefined}
             style={StyleSheet.absoluteFill}
           />
         ) : null}
@@ -107,7 +107,13 @@ export const LiquidGlassView = memo(function LiquidGlassView({
           colors={gradients.topSpecular}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
-          style={[styles.topSpecular, { left: Math.min(20, borderRadius * 0.55), right: Math.min(20, borderRadius * 0.55) }]}
+          style={[
+            styles.topSpecular,
+            {
+              left: Math.min(20, borderRadius * 0.55),
+              right: Math.min(20, borderRadius * 0.55),
+            },
+          ]}
           pointerEvents="none"
         />
 
@@ -120,11 +126,11 @@ export const LiquidGlassView = memo(function LiquidGlassView({
 function baseBackgroundFor(variant: GlassVariant, liveBlur: boolean): string {
   switch (variant) {
     case "dock":
-      return liveBlur ? "rgba(12, 17, 27, 0.52)" : "rgba(14, 20, 31, 0.84)";
+      return liveBlur ? "rgba(12, 17, 27, 0.52)" : "rgba(13, 19, 30, 0.88)";
     case "frosted":
-      return liveBlur ? "rgba(18, 25, 38, 0.46)" : "rgba(19, 27, 40, 0.78)";
+      return liveBlur ? "rgba(18, 25, 38, 0.46)" : "rgba(18, 26, 39, 0.82)";
     case "card":
-      return "rgba(18, 25, 38, 0.68)";
+      return "rgba(18, 25, 38, 0.72)";
     case "pearl":
       return "#FFF7F1";
     case "ember":
@@ -132,7 +138,7 @@ function baseBackgroundFor(variant: GlassVariant, liveBlur: boolean): string {
     case "emberSolid":
       return "#FF6242";
     case "emerald":
-      return "rgba(22, 74, 58, 0.72)";
+      return "rgba(22, 74, 58, 0.76)";
   }
 }
 
@@ -140,10 +146,10 @@ function gradientFor(variant: GlassVariant): readonly [string, string, ...string
   switch (variant) {
     case "dock":
       return [
-        "rgba(255, 255, 255, 0.20)",
-        "rgba(255, 255, 255, 0.04)",
-        "rgba(255, 132, 98, 0.06)",
-        "rgba(255, 255, 255, 0.10)",
+        "rgba(255, 255, 255, 0.22)",
+        "rgba(255, 255, 255, 0.05)",
+        "rgba(255, 132, 98, 0.07)",
+        "rgba(255, 255, 255, 0.11)",
       ];
     case "frosted":
       return gradients.glassSheen;

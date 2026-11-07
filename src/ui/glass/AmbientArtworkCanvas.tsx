@@ -1,9 +1,13 @@
 import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { memo } from "react";
+import React, { memo, useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { palette } from "@/design-system/tokens";
-import { usePerformanceProfile } from "@/hooks/useDeviceTier";
+import {
+  IMAGE_REQUEST_HEADERS,
+  markResizeUnsupportedForUrl,
+  optimizeImageUrl,
+} from "@/services/provider/imageOptimizer";
 
 interface AmbientArtworkCanvasProps {
   imageUri?: string | null;
@@ -12,33 +16,54 @@ interface AmbientArtworkCanvasProps {
 }
 
 /**
- * Disk-cached blurred cinema colour-bleed behind Liquid Glass surfaces.
- * Uses Glide's native hardware cross-fade when `imageUri` transitions between
- * Featured Hero dramas — zero JS loops, locked 60fps even on 2 GB RAM phones.
+ * Ultra-fast cinema colour-bleed behind Liquid Glass surfaces.
+ * Loads a tiny 120px WebP derivative (~2.5 KB) at `priority="low"` with
+ * lightweight `blurRadius={16}` so Glide's decoder threads stay 100% free for
+ * foreground poster cards while delivering rich hardware cross-fades.
  */
 export const AmbientArtworkCanvas = memo(function AmbientArtworkCanvas({
   imageUri,
   intensity = "medium",
 }: AmbientArtworkCanvasProps) {
-  const profile = usePerformanceProfile();
+  const [rawFallback, setRawFallback] = useState(false);
+
+  useEffect(() => {
+    setRawFallback(false);
+  }, [imageUri]);
+
+  const optimized = optimizeImageUrl(imageUri, "ambient");
+  const effectiveUri = rawFallback ? (imageUri?.trim() || null) : optimized;
+
   const topScrim =
     intensity === "rich"
-      ? "rgba(5, 8, 14, 0.34)"
+      ? "rgba(5, 8, 14, 0.36)"
       : intensity === "medium"
-        ? "rgba(5, 8, 14, 0.56)"
-        : "rgba(5, 8, 14, 0.72)";
+        ? "rgba(5, 8, 14, 0.58)"
+        : "rgba(5, 8, 14, 0.74)";
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
       <View style={[StyleSheet.absoluteFill, { backgroundColor: palette.background }]} />
-      {imageUri ? (
+      {effectiveUri ? (
         <ExpoImage
-          source={{ uri: imageUri }}
+          source={{
+            uri: effectiveUri,
+            headers: IMAGE_REQUEST_HEADERS as Record<string, string>,
+          }}
           style={styles.bleedImage}
           contentFit="cover"
-          blurRadius={profile.isLowRam ? 34 : 52}
+          allowDownscaling
+          decodeFormat="rgb"
+          priority="low"
+          blurRadius={16}
           cachePolicy="memory-disk"
-          transition={profile.isLowRam ? 240 : 500}
+          transition={180}
+          onError={() => {
+            if (!rawFallback && imageUri && optimized !== imageUri.trim()) {
+              markResizeUnsupportedForUrl(imageUri);
+              setRawFallback(true);
+            }
+          }}
         />
       ) : (
         <LinearGradient

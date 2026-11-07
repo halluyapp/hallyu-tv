@@ -100,8 +100,8 @@ export const GlassLandscapeCard = memo(function GlassLandscapeCard({
           Animated.timing(scale, { toValue: focused ? 1.045 : 1, duration: motion.instant, useNativeDriver: true }).start();
         }}
         onPress={() => {
-          play("confirm");
           onPress();
+          play("confirm");
         }}
         onLongPress={onLongPress}
       >

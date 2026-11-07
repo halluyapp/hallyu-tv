@@ -1,28 +1,67 @@
-import { hydrateCache, writeCache } from "@/services/cache/swr";
+import { cacheState, hydrateCache, readCache, writeCache } from "@/services/cache/swr";
 import type { CatalogueItem, HomeSection } from "@/types/provider";
 import { fetchHome } from "./adapter";
 
 /**
- * The home catalogue with an offline-first cache in front of it.
+ * The home catalogue with a 0ms synchronous RAM cache + persistent SWR disk cache.
  *
- * `hydrateHome` paints the last known wall immediately (memory, then disk).
- * `loadHome` refreshes from the provider and rewrites the cache. Screens call
- * both: instant first frame, correct content a moment later.
+ * - `peekHome()` reads RAM synchronously on frame 0 (0ms, zero skeleton flash!).
+ * - `hydrateHome()` restores from AsyncStorage on cold boot.
+ * - `loadHome(force)` skips redundant network fetches while fresh (3 min TTL)
+ *   unless `force = true` (pull-to-refresh).
+ * - `warmBootHome()` kicks off disk + network loading at module import time
+ *   before React Navigation even finishes mounting!
  */
 
 const KEY = "hallyu.cache.home.v1";
+const FRESH_TTL_MS = 3 * 60 * 1000;
 
-export async function loadHome(): Promise<HomeSection[]> {
+let bootPromise: Promise<HomeSection[]> | null = null;
+
+export function peekHome(): HomeSection[] | null {
+  const entry = readCache<HomeSection[]>(KEY);
+  if (!entry || !Array.isArray(entry.value) || entry.value.length === 0) return null;
+  return entry.value;
+}
+
+export function isHomeFresh(): boolean {
+  const entry = readCache<HomeSection[]>(KEY);
+  return (
+    Boolean(entry && Array.isArray(entry.value) && entry.value.length > 0) &&
+    cacheState(entry, Date.now(), FRESH_TTL_MS) === "fresh"
+  );
+}
+
+export async function loadHome(force = false): Promise<HomeSection[]> {
+  if (!force && isHomeFresh()) {
+    const cached = peekHome();
+    if (cached) return cached;
+  }
   const sections = await fetchHome();
-  writeCache(KEY, sections);
+  if (sections.length > 0) {
+    writeCache(KEY, sections);
+  }
   return sections;
 }
 
 export async function hydrateHome(): Promise<HomeSection[] | null> {
+  const mem = peekHome();
+  if (mem) return mem;
   const entry = await hydrateCache<HomeSection[]>(KEY);
   if (!entry) return null;
   if (!Array.isArray(entry.value) || entry.value.length === 0) return null;
   return entry.value;
+}
+
+export function warmBootHome(): Promise<HomeSection[]> {
+  if (bootPromise) return bootPromise;
+  bootPromise = (async () => {
+    await hydrateHome().catch(() => null);
+    return await loadHome(false);
+  })().finally(() => {
+    bootPromise = null;
+  });
+  return bootPromise;
 }
 
 /**

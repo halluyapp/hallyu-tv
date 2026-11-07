@@ -4,12 +4,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-native";
 import { COLLAPSED_RAIL_WIDTH } from "@/apps/tv/focus/TvSidebar";
 import type { TvStackParamList } from "@/apps/tv/navigation/tvTypes";
+import { prefetchPosterBatch } from "@/components/ui/Poster";
 import { palette, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import {
   hydrateWorldFirstPage,
   loadWorldPage,
+  peekWorldFirstPage,
   TV_CATEGORY_FILTERS,
   WORLD_DEFINITIONS,
   type SubFilterId,
@@ -44,17 +46,20 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
   const world = WORLD_DEFINITIONS[worldId];
 
   const [subFilter, setSubFilter] = useState<SubFilterId>("all");
-  const [items, setItems] = useState<CatalogueItem[]>([]);
+  const [items, setItems] = useState<CatalogueItem[]>(() => peekWorldFirstPage(worldId) ?? []);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => (peekWorldFirstPage(worldId)?.length ?? 0) === 0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [focusedPosterUri, setFocusedPosterUri] = useState<string | null>(null);
+  const [focusedPosterUri, setFocusedPosterUri] = useState<string | null>(
+    () => peekWorldFirstPage(worldId)?.[0]?.posterUrl ?? null,
+  );
   const [lastClickedId, setLastClickedId] = useState<string | null>(null);
 
   const reqSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setSubFilter("all");
@@ -73,8 +78,9 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
       const cached = await hydrateWorldFirstPage(worldId);
       if (seq === reqSeqRef.current && cached && cached.length > 0) {
         setItems(cached);
-        setFocusedPosterUri(cached[0]?.posterUrl ?? null);
+        setFocusedPosterUri((prev) => prev ?? cached[0]?.posterUrl ?? null);
         setLoading(false);
+        prefetchPosterBatch(cached.slice(0, 15).map((i) => i.posterUrl), "poster", 15);
       }
     }
 
@@ -84,7 +90,8 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
       setItems(res.items);
       setPage(1);
       setTotalPages(res.totalPages);
-      setFocusedPosterUri(res.items[0]?.posterUrl ?? null);
+      setFocusedPosterUri((prev) => prev ?? res.items[0]?.posterUrl ?? null);
+      prefetchPosterBatch(res.items.slice(0, 15).map((i) => i.posterUrl), "poster", 15);
     } catch {
       if (seq !== reqSeqRef.current || controller.signal.aborted) return;
       setError("Could not load this category right now. Check your connection and retry.");
@@ -97,7 +104,10 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
 
   useEffect(() => {
     void fetchFirstPage();
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    };
   }, [fetchFirstPage]);
 
   const fetchNextPage = useCallback(async () => {
@@ -219,7 +229,10 @@ export function TvCategoryScreen({ worldId }: TvCategoryScreenProps) {
               onPress={openDetails}
               onFocusItem={(focused) => {
                 prefetchDetail(focused.slug);
-                if (focused.posterUrl) setFocusedPosterUri(focused.posterUrl);
+                if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+                focusTimerRef.current = setTimeout(() => {
+                  if (focused.posterUrl) setFocusedPosterUri(focused.posterUrl);
+                }, 320);
               }}
             />
           </View>

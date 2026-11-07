@@ -19,13 +19,14 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MOBILE_TAB_BAR_CLEARANCE } from "@/apps/mobile/components/MobileTabBar";
 import type { MobileStackParamList, MobileTabParamList } from "@/apps/mobile/navigation/mobileTypes";
+import { prefetchPosterBatch } from "@/components/ui/Poster";
 import { BRAND_WORDMARK } from "@/config/branding";
 import { palette, radius } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import type { WorldId } from "@/services/provider/categories";
 import { prefetchDetail } from "@/services/provider/detailCache";
-import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
+import { hydrateHome, loadHome, peekHome } from "@/services/provider/homeCatalogue";
 import { takePrefetched } from "@/services/provider/prefetch";
 import { useSound } from "@/services/sound/SoundContext";
 import { COMPLETION_THRESHOLD, useLibrary, type ProgressRow } from "@/state/LibraryContext";
@@ -66,17 +67,19 @@ export function MobileHomeScreen() {
   const { play } = useSound();
   const { progress, inWatchlist, toggleWatchlist, latestFor } = useLibrary();
 
-  const [sections, setSections] = useState<HomeSection[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [sections, setSections] = useState<HomeSection[]>(() => peekHome() ?? []);
+  const [loading, setLoading] = useState(() => (peekHome()?.length ?? 0) === 0);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activePill, setActivePill] = useState<"all" | WorldId>("all");
-  const [ambientPosterUri, setAmbientPosterUri] = useState<string | null>(null);
+  const [ambientPosterUri, setAmbientPosterUri] = useState<string | null>(
+    () => peekHome()?.[0]?.items[0]?.posterUrl ?? null,
+  );
 
   const loadCatalogue = useCallback(async (isPull = false) => {
     if (isPull) setRefreshing(true);
     setError(null);
-    let hadCached = false;
+    let hadCached = (peekHome()?.length ?? 0) > 0;
     if (!isPull) {
       const cached = await hydrateHome();
       if (cached && cached.length > 0) {
@@ -84,13 +87,23 @@ export function MobileHomeScreen() {
         setSections(cached);
         setAmbientPosterUri((prev) => prev ?? cached[0]?.items[0]?.posterUrl ?? null);
         setLoading(false);
+        prefetchPosterBatch(
+          cached.slice(0, 3).flatMap((s) => s.items.slice(0, 5).map((i) => i.posterUrl)),
+          "poster",
+          14,
+        );
       }
     }
     try {
-      const fresh = await loadHome();
+      const fresh = await loadHome(isPull);
       if (fresh.length > 0) {
         setSections(fresh);
         setAmbientPosterUri((prev) => prev ?? fresh[0]?.items[0]?.posterUrl ?? null);
+        prefetchPosterBatch(
+          fresh.slice(0, 3).flatMap((s) => s.items.slice(0, 5).map((i) => i.posterUrl)),
+          "poster",
+          14,
+        );
       } else if (!hadCached) {
         setError("No catalogue sections returned.");
       }
@@ -143,7 +156,7 @@ export function MobileHomeScreen() {
 
   const openDetails = useCallback(
     (item: CatalogueItem) => {
-      prefetchDetail(item.slug);
+      prefetchDetail(item.slug, true);
       navigation.navigate("MobileDetails", {
         subjectId: item.subjectId,
         detailPath: item.slug,

@@ -1,11 +1,11 @@
 import { type RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { ArrowLeft, Check, Download, Film, Play, Plus, Star } from "lucide-react-native";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { TvStackParamList } from "@/apps/tv/navigation/tvTypes";
+import { Poster, initialsFor } from "@/components/ui/Poster";
 import { palette, radius, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
@@ -301,12 +301,12 @@ export function TvDetailsScreen() {
           style={[styles.backdropWrap, { height: Math.round(stage.height * 0.72) }]}
           pointerEvents="none"
         >
-          <ExpoImage
-            source={{ uri: backdropUri }}
+          <Poster
+            uri={backdropUri}
+            initials={initialsFor(effectiveTitle)}
+            kind="hero"
+            priority="high"
             style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            transition={profile.imageTransitionMs}
           />
           <LinearGradient
             colors={["#05080E", "rgba(5, 8, 14, 0.82)", "rgba(5, 8, 14, 0.14)"]}

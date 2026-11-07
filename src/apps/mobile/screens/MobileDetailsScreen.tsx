@@ -1,6 +1,5 @@
 import { type RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Speech from "expo-speech";
 import {
@@ -303,11 +302,12 @@ export function MobileDetailsScreen() {
         <AmbientArtworkCanvas imageUri={initialPoster} intensity="rich" />
         <View style={styles.posterHero}>
           {initialPoster ? (
-            <ExpoImage
-              source={{ uri: initialPoster }}
+            <Poster
+              uri={initialPoster}
+              initials={initialsFor(initialTitle)}
+              kind="hero"
+              priority="high"
               style={StyleSheet.absoluteFill}
-              contentFit="cover"
-              cachePolicy="memory-disk"
             />
           ) : null}
           <LinearGradient
@@ -380,12 +380,12 @@ export function MobileDetailsScreen() {
             {/* Top Edge-to-Edge Poster Backdrop */}
             <View style={styles.posterHero}>
               {heroArt ? (
-                <ExpoImage
-                  source={{ uri: heroArt }}
+                <Poster
+                  uri={heroArt}
+                  initials={initialsFor(effectiveTitle)}
+                  kind="hero"
+                  priority="high"
                   style={StyleSheet.absoluteFill}
-                  contentFit="cover"
-                  cachePolicy="memory-disk"
-                  transition={profile.imageTransitionMs}
                 />
               ) : null}
               <LinearGradient

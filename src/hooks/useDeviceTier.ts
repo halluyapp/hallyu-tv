@@ -53,10 +53,10 @@ function buildProfile(): PerformanceProfile {
     tier,
     isLowRam,
     allowLiveBlur: !isLowRam,
-    listWindowSize: isLowRam ? 4 : 6,
-    maxToRenderPerBatch: isLowRam ? 5 : 8,
-    initialNumToRender: isLowRam ? 4 : 6,
-    imageTransitionMs: isLowRam ? 0 : 180,
+    listWindowSize: isLowRam ? 5 : 7,
+    maxToRenderPerBatch: isLowRam ? 6 : 10,
+    initialNumToRender: isLowRam ? 5 : 7,
+    imageTransitionMs: isLowRam ? 0 : 80,
     totalMemoryBytes: totalMemory,
   };
 }

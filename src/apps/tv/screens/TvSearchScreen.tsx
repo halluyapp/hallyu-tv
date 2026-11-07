@@ -62,6 +62,7 @@ export function TvSearchScreen() {
 
   const searchSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     loadRecentSearches().then(setRecent).catch(() => {});
@@ -73,6 +74,9 @@ export function TvSearchScreen() {
         if (items[0]?.posterUrl) setAmbientUri(items[0].posterUrl);
       })
       .catch(() => {});
+    return () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -307,10 +311,13 @@ export function TvSearchScreen() {
                 item={item}
                 width={posterWidth}
                 onPress={openDetails}
-                onFocusItem={(focused) => {
-                  prefetchDetail(focused.slug);
+              onFocusItem={(focused) => {
+                prefetchDetail(focused.slug);
+                if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+                focusTimerRef.current = setTimeout(() => {
                   if (focused.posterUrl) setAmbientUri(focused.posterUrl);
-                }}
+                }, 320);
+              }}
               />
             </View>
           )}

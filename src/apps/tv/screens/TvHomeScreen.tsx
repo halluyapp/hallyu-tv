@@ -1,16 +1,16 @@
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
 import { COLLAPSED_RAIL_WIDTH } from "@/apps/tv/focus/TvSidebar";
 import type { TvStackParamList } from "@/apps/tv/navigation/tvTypes";
+import { Poster, prefetchPosterBatch } from "@/components/ui/Poster";
 import { palette, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import { prefetchDetail } from "@/services/provider/detailCache";
-import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
+import { hydrateHome, loadHome, peekHome } from "@/services/provider/homeCatalogue";
 import { takePrefetched } from "@/services/provider/prefetch";
 import { COMPLETION_THRESHOLD, useLibrary, type ProgressRow } from "@/state/LibraryContext";
 import type { CatalogueItem, HomeSection, TitleDetail } from "@/types/provider";
@@ -38,27 +38,39 @@ export function TvHomeScreen() {
   const profile = usePerformanceProfile();
   const { progress, inWatchlist, toggleWatchlist, latestFor } = useLibrary();
 
-  const [sections, setSections] = useState<HomeSection[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [sections, setSections] = useState<HomeSection[]>(() => peekHome() ?? []);
+  const [loading, setLoading] = useState(() => (peekHome()?.length ?? 0) === 0);
   const [error, setError] = useState<string | null>(null);
-  const [heroBackdropUri, setHeroBackdropUri] = useState<string | null>(null);
+  const [heroBackdropUri, setHeroBackdropUri] = useState<string | null>(
+    () => peekHome()?.[0]?.items[0]?.posterUrl ?? null,
+  );
   const [lastClickedId, setLastClickedId] = useState<string | null>(null);
 
   const refreshCatalogue = useCallback(async () => {
     setError(null);
-    let hadCached = false;
+    let hadCached = (peekHome()?.length ?? 0) > 0;
     const cached = await hydrateHome();
     if (cached && cached.length > 0) {
       hadCached = true;
       setSections(cached);
       setHeroBackdropUri((prev) => prev ?? cached[0]?.items[0]?.posterUrl ?? null);
       setLoading(false);
+      prefetchPosterBatch(
+        cached.slice(0, 3).flatMap((s) => s.items.slice(0, 6).map((i) => i.posterUrl)),
+        "poster",
+        16,
+      );
     }
     try {
       const fresh = await loadHome();
       if (fresh.length > 0) {
         setSections(fresh);
         setHeroBackdropUri((prev) => prev ?? fresh[0]?.items[0]?.posterUrl ?? null);
+        prefetchPosterBatch(
+          fresh.slice(0, 3).flatMap((s) => s.items.slice(0, 6).map((i) => i.posterUrl)),
+          "poster",
+          16,
+        );
       } else if (!hadCached) {
         setError("No catalogue sections returned right now.");
       }
@@ -88,7 +100,7 @@ export function TvHomeScreen() {
   const openDetails = useCallback(
     (item: CatalogueItem) => {
       setLastClickedId(item.subjectId);
-      prefetchDetail(item.slug);
+      prefetchDetail(item.slug, true);
       navigation.navigate("TvDetails", {
         subjectId: item.subjectId,
         detailPath: item.slug,
@@ -211,12 +223,11 @@ export function TvHomeScreen() {
           ]}
           pointerEvents="none"
         >
-          <ExpoImage
-            source={{ uri: heroBackdropUri }}
+          <Poster
+            uri={heroBackdropUri}
+            kind="hero"
+            priority="high"
             style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            transition={profile.isLowRam ? 220 : 420}
           />
           <LinearGradient
             colors={["#05080E", "rgba(5, 8, 14, 0.78)", "rgba(5, 8, 14, 0.16)"]}

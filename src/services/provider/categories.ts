@@ -1,7 +1,7 @@
-import { hydrateCache, writeCache } from "@/services/cache/swr";
+import { cacheState, hydrateCache, readCache, writeCache } from "@/services/cache/swr";
 import type { CatalogueItem, HomeSection } from "@/types/provider";
 import { searchCatalogue } from "./adapter";
-import { hydrateHome, loadHome } from "./homeCatalogue";
+import { hydrateHome, loadHome, peekHome } from "./homeCatalogue";
 
 export type WorldId =
   | "all"
@@ -193,7 +193,23 @@ export interface WorldPageResult {
   totalPages: number;
 }
 
+const WORLD_FRESH_TTL_MS = 3 * 60 * 1000;
+
+export function peekWorldFirstPage(worldId: WorldId): CatalogueItem[] | null {
+  const mem = readCache<CatalogueItem[]>(`hallyu.world.v1.${worldId}`);
+  if (mem && Array.isArray(mem.value) && mem.value.length > 0) {
+    return mem.value;
+  }
+  const home = peekHome();
+  if (!home) return null;
+  const def = WORLD_DEFINITIONS[worldId];
+  const seeded = flattenHomeSections(home, def.sectionMatcher, def.mediaType);
+  return seeded.length > 0 ? seeded : null;
+}
+
 export async function hydrateWorldFirstPage(worldId: WorldId): Promise<CatalogueItem[] | null> {
+  const sync = peekWorldFirstPage(worldId);
+  if (sync) return sync;
   const cached = await hydrateCache<CatalogueItem[]>(`hallyu.world.v1.${worldId}`);
   if (cached && Array.isArray(cached.value) && cached.value.length > 0) {
     return cached.value;
@@ -211,12 +227,24 @@ export async function loadWorldPage(
   subFilter: SubFilterId = "all",
   signal?: AbortSignal,
 ): Promise<WorldPageResult> {
+  if (page === 1 && subFilter === "all") {
+    const existing = readCache<CatalogueItem[]>(`hallyu.world.v1.${worldId}`);
+    if (
+      existing &&
+      Array.isArray(existing.value) &&
+      existing.value.length > 0 &&
+      cacheState(existing, Date.now(), WORLD_FRESH_TTL_MS) === "fresh"
+    ) {
+      return { items: existing.value, page: 1, totalPages: 3 };
+    }
+  }
+
   const def = WORLD_DEFINITIONS[worldId];
   const query = effectiveQueryFor(def, subFilter);
 
   if (page === 1 && (worldId === "all" || worldId === "discover") && subFilter === "all") {
     const [sections, searchRes] = await Promise.all([
-      loadHome().catch(() => [] as HomeSection[]),
+      (peekHome() ? Promise.resolve(peekHome()!) : hydrateHome().then((c) => c ?? loadHome().catch(() => [] as HomeSection[]))),
       searchCatalogue(query, 1, signal).catch(() => ({ items: [] as CatalogueItem[], page: 1, totalPages: 1 })),
     ]);
     const combined = dedupeItems([...flattenHomeSections(sections), ...searchRes.items]);
@@ -230,7 +258,7 @@ export async function loadWorldPage(
 
   const [homeSections, searchRes] = await Promise.all([
     page === 1 && subFilter === "all"
-      ? hydrateHome().then((c) => c ?? loadHome().catch(() => []))
+      ? (peekHome() ? Promise.resolve(peekHome()!) : hydrateHome().then((c) => c ?? loadHome().catch(() => [])))
       : Promise.resolve([] as HomeSection[]),
     searchCatalogue(query, page, signal),
   ]);

@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MOBILE_TAB_BAR_CLEARANCE } from "@/apps/mobile/components/MobileTabBar";
 import type { MobileStackParamList, MobileTabParamList } from "@/apps/mobile/navigation/mobileTypes";
+import { prefetchPosterBatch } from "@/components/ui/Poster";
 import { palette, radius } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
@@ -24,6 +25,7 @@ import {
   hydrateWorldFirstPage,
   loadWorldPage,
   MOBILE_EXPLORE_WORLDS,
+  peekWorldFirstPage,
   WORLD_DEFINITIONS,
   type WorldId,
 } from "@/services/provider/categories";
@@ -61,13 +63,14 @@ export function MobileExploreScreen() {
   const stage = useStage();
   const profile = usePerformanceProfile();
 
+  const initialWorld = route.params?.initialWorld ?? "kdrama";
   const [query, setQuery] = useState("");
-  const [worldId, setWorldId] = useState<WorldId>(route.params?.initialWorld ?? "kdrama");
-  const [items, setItems] = useState<CatalogueItem[]>([]);
+  const [worldId, setWorldId] = useState<WorldId>(initialWorld);
+  const [items, setItems] = useState<CatalogueItem[]>(() => peekWorldFirstPage(initialWorld) ?? []);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [recent, setRecent] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => (peekWorldFirstPage(initialWorld)?.length ?? 0) === 0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,6 +128,7 @@ export function MobileExploreScreen() {
     if (seq === seqRef.current && cached && cached.length > 0) {
       setItems(cached);
       setLoading(false);
+      prefetchPosterBatch(cached.slice(0, 12).map((i) => i.posterUrl), "poster", 12);
     }
 
     try {
@@ -133,6 +137,7 @@ export function MobileExploreScreen() {
       setItems(res.items);
       setPage(1);
       setTotalPages(res.totalPages);
+      prefetchPosterBatch(res.items.slice(0, 12).map((i) => i.posterUrl), "poster", 12);
     } catch {
       if (seq !== seqRef.current || controller.signal.aborted) return;
       if (!cached || cached.length === 0) {

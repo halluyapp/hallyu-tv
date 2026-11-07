@@ -19,6 +19,7 @@ import { TvDownloadsScreen, TvLibraryScreen } from "@/apps/tv/screens/TvLibraryA
 import { TvSearchScreen } from "@/apps/tv/screens/TvSearchScreen";
 import { TvSettingsScreen } from "@/apps/tv/screens/TvSettingsScreen";
 import { palette } from "@/design-system/tokens";
+import { warmBootHome } from "@/services/provider/homeCatalogue";
 import { SoundProvider } from "@/services/sound/SoundContext";
 import {
   checkForAppUpdates,
@@ -111,6 +112,9 @@ class TvErrorBoundary extends Component<{ children: ReactNode }, { error: Error 
   }
 }
 
+// Kick off disk hydration + /home network request at bundle boot so TV Home paints immediately!
+void warmBootHome().catch(() => {});
+
 /**
  * Standalone Hallyu TV Root Application (`app.hallyutv.dev`).
  * Zero mobile bottom tabs, zero touch sheets — pure 10-foot Liquid Glass cinema.
@@ -125,6 +129,11 @@ export function TvApp() {
     setCurrentVersion(curVer);
     setUpdateModalOpen(true);
   }, []);
+
+  const renderTvShell = useCallback(
+    () => <TvShellScreen onOpenUpdateModal={openUpdateModal} />,
+    [openUpdateModal],
+  );
 
   // Quiet once-per-session TV update check
   useEffect(() => {
@@ -153,13 +162,12 @@ export function TvApp() {
                     <Stack.Navigator
                       screenOptions={{
                         headerShown: false,
+                        freezeOnBlur: true,
                         animation: "fade",
                         contentStyle: { backgroundColor: palette.background },
                       }}
                     >
-                      <Stack.Screen name="TvShell">
-                        {() => <TvShellScreen onOpenUpdateModal={openUpdateModal} />}
-                      </Stack.Screen>
+                      <Stack.Screen name="TvShell">{renderTvShell}</Stack.Screen>
                       <Stack.Screen name="TvDetails" component={TvDetailsScreen} />
                       <Stack.Screen name="TvPlayer" component={TvPlayerScreen} />
                     </Stack.Navigator>

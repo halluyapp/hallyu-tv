@@ -73,8 +73,8 @@ export const GlassPillButton = memo(function GlassPillButton({
 
   const handlePress = useCallback(() => {
     if (disabled) return;
-    play(variant === "primary" ? "confirm" : "tap");
     onPress();
+    play(variant === "primary" ? "confirm" : "tap");
   }, [disabled, onPress, play, variant]);
 
   const resolvedGlass: GlassVariant = focused

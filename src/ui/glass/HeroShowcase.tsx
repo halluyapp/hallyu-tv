@@ -1,4 +1,3 @@
-import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Check, ChevronLeft, ChevronRight, Play, Plus, Star } from "lucide-react-native";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -11,10 +10,10 @@ import {
   Text,
   View,
 } from "react-native";
+import { Poster, initialsFor, prefetchPosterBatch } from "@/components/ui/Poster";
 import { palette, radius } from "@/design-system/tokens";
 import { loadDetailCached, peekCachedDetail, prefetchDetail } from "@/services/provider/detailCache";
 import { curateFeaturedItems } from "@/services/provider/homeCatalogue";
-import { prefetchStreams } from "@/services/provider/prefetch";
 import { useSound } from "@/services/sound/SoundContext";
 import type { ProgressRow } from "@/state/LibraryContext";
 import type { CatalogueItem, TitleDetail } from "@/types/provider";
@@ -36,7 +35,6 @@ export function useHeroShowcaseController({
   items,
   screenFocused,
   onActiveChange,
-  latestFor,
 }: SharedHeroControllerOptions) {
   const { play } = useSound();
   const [activeIndex, setActiveIndex] = useState(0);
@@ -116,7 +114,7 @@ export function useHeroShowcaseController({
   const activeItem = items[activeIndex] ?? items[0] ?? null;
   const nextItem = items.length > 1 ? items[(activeIndex + 1) % items.length] ?? null : null;
 
-  // Instant cached detail lookup + background pre-warm of next slide's artwork & detail
+  // Instant cached detail lookup + deferred idle pre-warm so visible Home posters get 100% bandwidth first!
   useEffect(() => {
     if (!activeItem?.slug) {
       setActiveDetail(null);
@@ -134,37 +132,27 @@ export function useHeroShowcaseController({
     }
 
     let cancelled = false;
-    loadDetailCached(activeItem.slug)
-      .then((d) => {
-        if (!cancelled) {
-          setActiveDetail(d);
-          onActiveChange?.(activeItem, d);
-        }
-      })
-      .catch(() => {});
+    const idleTimer = setTimeout(() => {
+      loadDetailCached(activeItem.slug)
+        .then((d) => {
+          if (!cancelled) {
+            setActiveDetail(d);
+            onActiveChange?.(activeItem, d);
+          }
+        })
+        .catch(() => {});
 
-    // Pre-warm next slide poster + detail so upcoming cross-fade is 0ms instant
-    if (nextItem) {
-      if (nextItem.posterUrl) {
-        void ExpoImage.prefetch(nextItem.posterUrl).catch(() => {});
+      if (nextItem) {
+        prefetchPosterBatch([nextItem.posterUrl], "hero", 1);
+        prefetchDetail(nextItem.slug);
       }
-      prefetchDetail(nextItem.slug);
-    }
-
-    // After viewer rests 850ms on current hero, silently pre-warm stream + captions for instant Watch Now
-    const streamWarmTimer = setTimeout(() => {
-      const resume = latestFor(activeItem.subjectId);
-      const isSeries = activeItem.mediaType === "series";
-      const se = isSeries ? (resume?.season_number ?? 1) : 0;
-      const ep = isSeries ? (resume?.episode_number ?? 1) : 0;
-      prefetchStreams(activeItem.subjectId, activeItem.slug, se, ep);
-    }, 850);
+    }, warm ? 250 : 1_100);
 
     return () => {
       cancelled = true;
-      clearTimeout(streamWarmTimer);
+      clearTimeout(idleTimer);
     };
-  }, [activeItem, latestFor, nextItem, onActiveChange]);
+  }, [activeItem, nextItem, onActiveChange]);
 
   return {
     activeIndex,
@@ -268,15 +256,13 @@ export const MobileHeroShowcase = memo(function MobileHeroShowcase({
               { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
             ]}
           >
-            {activeItem.posterUrl ? (
-              <ExpoImage
-                source={{ uri: activeItem.posterUrl }}
-                style={StyleSheet.absoluteFill}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-                transition={220}
-              />
-            ) : null}
+            <Poster
+              uri={activeItem.posterUrl}
+              initials={initialsFor(activeItem.name)}
+              kind="hero"
+              priority="high"
+              style={StyleSheet.absoluteFill}
+            />
             <LinearGradient
               colors={["rgba(5, 8, 14, 0.22)", "rgba(5, 8, 14, 0.08)", "rgba(5, 8, 14, 0.72)"]}
               locations={[0, 0.45, 1]}

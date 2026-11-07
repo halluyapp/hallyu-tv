@@ -79,8 +79,8 @@ export const GlassPosterCard = memo(function GlassPosterCard({
           Animated.timing(scale, { toValue: focused ? 1.05 : 1, duration: motion.instant, useNativeDriver: true }).start();
         }}
         onPress={() => {
-          play("confirm");
           onPress(item);
+          play("confirm");
         }}
       >
         <View

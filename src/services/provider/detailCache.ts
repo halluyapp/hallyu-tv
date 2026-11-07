@@ -11,6 +11,7 @@ import { fetchDetail } from "./adapter";
 const DETAIL_TTL_MS = 20 * 60 * 1000;
 const KEY_PREFIX = "hallyu.detail.v1.";
 const inflightDetails = new Map<string, Promise<TitleDetail>>();
+let focusPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 function keyFor(detailPath: string): string {
   return `${KEY_PREFIX}${detailPath}`;
@@ -58,10 +59,29 @@ export async function loadDetailCached(detailPath: string, signal?: AbortSignal)
   return task;
 }
 
-/** Fire-and-forget pre-warming for Featured Hero slides and focused cards. */
-export function prefetchDetail(detailPath: string | null | undefined): void {
+/**
+ * Pre-warms TitleDetail:
+ * - `immediate = true` (on tap/click): fires immediately on frame 0 during navigation.
+ * - `immediate = false` (default, on D-pad focus / hero hover): debounced by 420ms so
+ *   rapid remote navigation never floods the network or competes with poster downloads.
+ */
+export function prefetchDetail(detailPath: string | null | undefined, immediate = false): void {
   if (!detailPath) return;
   const cached = readCache<TitleDetail>(keyFor(detailPath));
   if (cached && cacheState(cached, Date.now(), DETAIL_TTL_MS) === "fresh") return;
-  void loadDetailCached(detailPath).catch(() => {});
+
+  if (immediate) {
+    if (focusPrefetchTimer) {
+      clearTimeout(focusPrefetchTimer);
+      focusPrefetchTimer = null;
+    }
+    void loadDetailCached(detailPath).catch(() => {});
+    return;
+  }
+
+  if (focusPrefetchTimer) clearTimeout(focusPrefetchTimer);
+  focusPrefetchTimer = setTimeout(() => {
+    focusPrefetchTimer = null;
+    void loadDetailCached(detailPath).catch(() => {});
+  }, 420);
 }

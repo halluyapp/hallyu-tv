@@ -19,6 +19,7 @@ import { MobileExploreScreen } from "@/apps/mobile/screens/MobileExploreScreen";
 import { MobileHomeScreen } from "@/apps/mobile/screens/MobileHomeScreen";
 import { BRAND_WORDMARK } from "@/config/branding";
 import { palette } from "@/design-system/tokens";
+import { warmBootHome } from "@/services/provider/homeCatalogue";
 import { SoundProvider } from "@/services/sound/SoundContext";
 import {
   checkForAppUpdates,
@@ -78,25 +79,32 @@ function MobileWelcomeScreen({ navigation }: { navigation: any }) {
   );
 }
 
+// Kick off disk hydration + /home network request at bundle boot (400-900ms before Home mounts!)
+void warmBootHome().catch(() => {});
+
 function MobileTabsNavigator({
   onOpenUpdateSheet,
 }: {
   onOpenUpdateSheet: (manifest: ReleaseManifest, currentVersion: string) => void;
 }) {
+  const renderMySpace = useCallback(
+    () => <MobileMySpaceScreen onOpenUpdateSheet={onOpenUpdateSheet} />,
+    [onOpenUpdateSheet],
+  );
+
   return (
     <Tab.Navigator
       tabBar={(props) => <MobileTabBar {...props} />}
       screenOptions={{
         headerShown: false,
         lazy: true,
+        freezeOnBlur: true,
       }}
     >
       <Tab.Screen name="Home" component={MobileHomeScreen} />
       <Tab.Screen name="Explore" component={MobileExploreScreen} />
       <Tab.Screen name="Downloads" component={MobileDownloadsScreen} />
-      <Tab.Screen name="MySpace">
-        {() => <MobileMySpaceScreen onOpenUpdateSheet={onOpenUpdateSheet} />}
-      </Tab.Screen>
+      <Tab.Screen name="MySpace">{renderMySpace}</Tab.Screen>
     </Tab.Navigator>
   );
 }
@@ -156,6 +164,11 @@ export function MobileApp() {
     return () => clearTimeout(timer);
   }, [openUpdateSheet]);
 
+  const renderMobileTabs = useCallback(
+    () => <MobileTabsNavigator onOpenUpdateSheet={openUpdateSheet} />,
+    [openUpdateSheet],
+  );
+
   if (showOnboarding === null) {
     return <EmberSplash />;
   }
@@ -174,13 +187,13 @@ export function MobileApp() {
                       initialRouteName={showOnboarding ? "Onboarding" : "MobileTabs"}
                       screenOptions={{
                         headerShown: false,
+                        freezeOnBlur: true,
+                        animation: "slide_from_right",
                         contentStyle: { backgroundColor: palette.background },
                       }}
                     >
                       <Stack.Screen name="Onboarding" component={MobileWelcomeScreen} />
-                      <Stack.Screen name="MobileTabs">
-                        {() => <MobileTabsNavigator onOpenUpdateSheet={openUpdateSheet} />}
-                      </Stack.Screen>
+                      <Stack.Screen name="MobileTabs">{renderMobileTabs}</Stack.Screen>
                       <Stack.Screen name="MobileDetails" component={MobileDetailsScreen} />
                       <Stack.Screen
                         name="MobilePlayer"

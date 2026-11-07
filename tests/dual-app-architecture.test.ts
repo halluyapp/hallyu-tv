@@ -35,6 +35,12 @@ import {
 import { MOBILE_EXPLORE_WORLDS, WORLD_DEFINITIONS, type WorldId } from "@/services/provider/categories";
 import { providerFetch } from "@/services/provider/client";
 import { curateFeaturedItems } from "@/services/provider/homeCatalogue";
+import {
+  IMAGE_REQUEST_HEADERS,
+  markResizeUnsupportedForUrl,
+  optimizeImageUrl,
+  resetUnsupportedResizeHosts,
+} from "@/services/provider/imageOptimizer";
 import { selectPreferredSource } from "@/services/provider/streams";
 import {
   addRecentSearch,
@@ -345,5 +351,26 @@ describe("Dual-APK Optical Liquid Glass Architecture", () => {
     } finally {
       globalThis.fetch = orig;
     }
+  });
+
+  test("optimizeImageUrl shrinks OSS posters to WebP, preserves signed URLs, and self-heals on unsupported hosts", () => {
+    resetUnsupportedResizeHosts();
+    expect(IMAGE_REQUEST_HEADERS.Referer).toBe("https://moviebox.ph/");
+    expect(IMAGE_REQUEST_HEADERS["User-Agent"]).toBe("Mozilla/5.0");
+
+    const rawAoneroom = "https://pbcdnw.aoneroom.com/image/2025/04/poster.jpg";
+    expect(optimizeImageUrl(rawAoneroom, "poster")).toContain("w_340");
+    expect(optimizeImageUrl(rawAoneroom, "poster")).toContain("format,webp");
+    expect(optimizeImageUrl(rawAoneroom, "ambient")).toContain("w_120");
+    expect(optimizeImageUrl(rawAoneroom, "hero")).toContain("w_780");
+
+    // Signed URLs with existing query strings are never mutated
+    const signed = "https://pbcdnw.aoneroom.com/image/poster.jpg?OSSAccessKeyId=123&Signature=abc";
+    expect(optimizeImageUrl(signed, "poster")).toBe(signed);
+
+    // Self-healing fallback disables resizing for that host immediately
+    markResizeUnsupportedForUrl(rawAoneroom);
+    expect(optimizeImageUrl(rawAoneroom, "poster")).toBe(rawAoneroom);
+    resetUnsupportedResizeHosts();
   });
 });
