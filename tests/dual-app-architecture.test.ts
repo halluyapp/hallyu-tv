@@ -70,6 +70,9 @@ function makeSource(resolution: string, qualityValue: number): StreamSource {
     sizeBytes: 120_000_000,
     durationSeconds: 3600,
     sourceLabel: resolution,
+    audioLanguage: null,
+    isDubbed: false,
+    isHindiDub: false,
     preview: false,
     verifiedFullLength: true,
   };

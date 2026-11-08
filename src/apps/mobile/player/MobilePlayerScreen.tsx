@@ -16,6 +16,7 @@ import {
   SkipForward,
   Subtitles,
   Unlock,
+  Volume2,
 } from "lucide-react-native";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -36,6 +37,7 @@ import { motion } from "@/design-system/motion";
 import { palette, radius } from "@/design-system/tokens";
 import { useStage } from "@/hooks/useStage";
 import { usePlaybackEngine } from "@/services/player/usePlaybackEngine";
+import { formatAudioTrackLabel } from "@/services/provider/originalAudio";
 import { takePrefetched } from "@/services/provider/prefetch";
 import { formatDuration } from "@/utils/format";
 import { GlassIconButton, GlassPillButton } from "@/ui/glass/GlassButton";
@@ -44,7 +46,7 @@ import { LiquidGlassView } from "@/ui/glass/LiquidGlassView";
 type Nav = NativeStackNavigationProp<MobileStackParamList>;
 type PlayerRoute = RouteProp<MobileStackParamList, "MobilePlayer">;
 
-type MobileSheetKind = "episodes" | "subtitles" | "quality" | "speed" | null;
+type MobileSheetKind = "episodes" | "subtitles" | "audio" | "quality" | "speed" | null;
 
 /**
  * 1:1 Hallyu Mobile Landscape Touch Liquid Glass Player (`docs/ui-previews/mobile-04-player.png`):
@@ -502,6 +504,16 @@ export function MobilePlayerScreen() {
                     }}
                   />
                 ) : null}
+                {!params.isTrailer && engine.nativeAudioTracks.length > 1 ? (
+                  <CompactControlPill
+                    icon={<Volume2 size={15} color="#FFFFFF" />}
+                    label="Audio"
+                    onPress={() => {
+                      engine.refreshNativeTracks();
+                      setSheet("audio");
+                    }}
+                  />
+                ) : null}
                 {!engine.offline && !params.isTrailer ? (
                   <CompactControlPill
                     label={qualityText}
@@ -540,10 +552,12 @@ export function MobilePlayerScreen() {
           sheet === "episodes"
             ? `Season ${params.season} · Episodes`
             : sheet === "subtitles"
-              ? "Subtitles & Audio"
-              : sheet === "quality"
-                ? "Stream Quality"
-                : "Playback Speed"
+              ? "Subtitles"
+              : sheet === "audio"
+                ? "Audio Track"
+                : sheet === "quality"
+                  ? "Stream Quality"
+                  : "Playback Speed"
         }
         onClose={() => {
           setSheet(null);
@@ -612,6 +626,23 @@ export function MobilePlayerScreen() {
                 onPress={() => {
                   engine.pickNativeSubtitle(null);
                   void engine.selectTrack(t);
+                  setSheet(null);
+                }}
+              />
+            ))}
+          </ScrollView>
+        ) : null}
+
+        {sheet === "audio" ? (
+          <ScrollView contentContainerStyle={styles.sheetStack}>
+            {engine.nativeAudioTracks.map((track, idx) => (
+              <GlassPillButton
+                key={track.id}
+                label={formatAudioTrackLabel(track, idx, engine.country)}
+                size="sm"
+                variant={engine.nativeAudioId === track.id ? "primary" : "secondary"}
+                onPress={() => {
+                  engine.pickNativeAudio(track);
                   setSheet(null);
                 }}
               />

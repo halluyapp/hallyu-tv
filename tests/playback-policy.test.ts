@@ -17,6 +17,9 @@ function source(resolution: string): NormalizedSource {
     sizeBytes: null,
     durationSeconds: 6000,
     sourceLabel: null,
+    audioLanguage: null,
+    isDubbed: false,
+    isHindiDub: false,
     preview: false,
     verifiedFullLength: true,
   };

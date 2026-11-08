@@ -22,6 +22,7 @@ import { motion } from "@/design-system/motion";
 import { palette, radius } from "@/design-system/tokens";
 import { useStage } from "@/hooks/useStage";
 import { usePlaybackEngine } from "@/services/player/usePlaybackEngine";
+import { formatAudioTrackLabel } from "@/services/provider/originalAudio";
 import { takePrefetched } from "@/services/provider/prefetch";
 import { formatDuration } from "@/utils/format";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
@@ -651,7 +652,7 @@ export function TvPlayerScreen() {
             {engine.nativeAudioTracks.map((track, idx) => (
               <GlassPillButton
                 key={track.id}
-                label={track.label || track.language || `Audio Track ${idx + 1}`}
+                label={formatAudioTrackLabel(track, idx, engine.country)}
                 variant={engine.nativeAudioId === track.id ? "primary" : "secondary"}
                 hasTVPreferredFocus={engine.nativeAudioId === track.id || idx === 0}
                 onPress={() => {

@@ -7,8 +7,10 @@ import { AppState } from "react-native";
 import { IS_TV } from "@/config/appVariant";
 import { classifyPlayerError, playerErrorMessage, type PlayerErrorKind } from "@/services/player/classify";
 import { pickAdaptiveSource, shouldDownshift } from "@/services/player/playbackPolicy";
-import { fetchCaptions, fetchCaptionText, resolveStreams } from "@/services/provider/adapter";
+import { fetchCaptions, fetchCaptionText, resolveOriginalStreams } from "@/services/provider/adapter";
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
+import { loadDetailCached, peekCachedDetail } from "@/services/provider/detailCache";
+import { pickOriginalAudioTrack } from "@/services/provider/originalAudio";
 import { prefetchStreams, takePrefetchedCaptions } from "@/services/provider/prefetch";
 import {
   pickRecoverySource,
@@ -28,6 +30,7 @@ export interface PlaybackRouteParams {
   detailPath: string;
   title: string;
   posterUrl: string | null;
+  country?: string | null;
   mediaType: "movie" | "series";
   season: number;
   episode: number;
@@ -121,6 +124,10 @@ export function usePlaybackEngine(
   const [nativeSubtitleTracks, setNativeSubtitleTracks] = useState<SubtitleTrack[]>([]);
   const [nativeAudioId, setNativeAudioId] = useState<string | null>(null);
   const [nativeSubtitleId, setNativeSubtitleId] = useState<string | null>(null);
+  const [effectiveCountry, setEffectiveCountry] = useState<string | null>(
+    () => params.country ?? (detailPath ? peekCachedDetail(detailPath)?.country ?? null : null),
+  );
+  const manualAudioOverrideRef = useRef(false);
 
   const mountedRef = useRef(true);
   const hudActiveRef = useRef(true);
@@ -166,6 +173,7 @@ export function usePlaybackEngine(
 
   const playingEvent = useEvent(player, "playingChange", { isPlaying: false });
   const statusEvent = useEvent(player, "statusChange", { status: "loading" as const, error: undefined });
+  const audioTracksEvent = useEvent(player, "availableAudioTracksChange", { availableAudioTracks: [] });
   const timeEvent = useEvent(player, "timeUpdate", {
     currentTime: Math.max(0, resumeAt),
     currentLiveTimestamp: null,
@@ -236,7 +244,7 @@ export function usePlaybackEngine(
       const at = positionRef.current;
       state.triedUrls.add(current.url);
       try {
-        const res = await resolveStreams(subjectId, detailPath, season, episode);
+        const res = await resolveOriginalStreams(subjectId, detailPath, season, episode);
         setAvailableSources(res.sources);
         const now = Date.now();
         stallTimesRef.current = stallTimesRef.current.filter((ts) => now - ts <= 90_000);
@@ -269,6 +277,7 @@ export function usePlaybackEngine(
     lastSavedRef.current = 0;
     autoNextCancelledRef.current = false;
     autoSubtitleRef.current = false;
+    manualAudioOverrideRef.current = false;
     subtitleOptOutRef.current = prefs.preferredSubtitleLang === "off";
     setNextCountdown(null);
     setAvailableSources(sources);
@@ -298,7 +307,7 @@ export function usePlaybackEngine(
     let cancelled = false;
     void (async () => {
       try {
-        const res = await resolveStreams(subjectId, detailPath, season, episode);
+        const res = await resolveOriginalStreams(subjectId, detailPath, season, episode);
         if (cancelled || !mountedRef.current) return;
         setAvailableSources(res.sources);
         const picked = selectPreferredSource(res.sources, prefs.preferredQuality, IS_TV);
@@ -316,14 +325,68 @@ export function usePlaybackEngine(
     };
   }, [applySource, detailPath, episode, isTrailer, prefs.preferredQuality, resumeAt, season, showError, sources, subjectId]);
 
+  // Hydrate origin country if not supplied so dual-audio streams pick Korean/Japanese/Chinese/English accurately
+  useEffect(() => {
+    if (params.country) {
+      setEffectiveCountry(params.country);
+      return;
+    }
+    if (!detailPath || isTrailer) return;
+    const warm = peekCachedDetail(detailPath);
+    if (warm?.country) {
+      setEffectiveCountry(warm.country);
+      return;
+    }
+    let cancelled = false;
+    loadDetailCached(detailPath)
+      .then((d) => {
+        if (!cancelled && d.country) setEffectiveCountry(d.country);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [detailPath, isTrailer, params.country]);
+
+  const applyOriginalAudioSelection = useCallback(
+    (audioList: readonly AudioTrack[]) => {
+      if (isTrailer || manualAudioOverrideRef.current || audioList.length <= 1) return;
+      const preferred = pickOriginalAudioTrack(audioList, effectiveCountry);
+      if (!preferred) return;
+      try {
+        if (player.audioTrack?.id !== preferred.id) {
+          player.audioTrack = preferred;
+        }
+        setNativeAudioId(preferred.id);
+      } catch {}
+    },
+    [effectiveCountry, isTrailer, player],
+  );
+
   const refreshNativeTracks = useCallback(() => {
     try {
-      setNativeAudioTracks([...player.availableAudioTracks]);
+      const audioList = [...player.availableAudioTracks];
+      setNativeAudioTracks(audioList);
       setNativeSubtitleTracks([...player.availableSubtitleTracks]);
       setNativeAudioId(player.audioTrack?.id ?? null);
       setNativeSubtitleId(player.subtitleTrack?.id ?? null);
+      applyOriginalAudioSelection(audioList);
     } catch {}
-  }, [player]);
+  }, [applyOriginalAudioSelection, player]);
+
+  useEffect(() => {
+    if (audioTracksEvent.availableAudioTracks.length > 0) {
+      const audioList = [...audioTracksEvent.availableAudioTracks];
+      setNativeAudioTracks(audioList);
+      applyOriginalAudioSelection(audioList);
+    }
+  }, [applyOriginalAudioSelection, audioTracksEvent]);
+
+  useEffect(() => {
+    if (nativeAudioTracks.length > 1) {
+      applyOriginalAudioSelection(nativeAudioTracks);
+    }
+  }, [applyOriginalAudioSelection, effectiveCountry, nativeAudioTracks]);
 
   useEffect(() => {
     setBuffering(statusEvent.status === "loading");
@@ -627,6 +690,7 @@ export function usePlaybackEngine(
 
   const pickNativeAudio = useCallback(
     (track: AudioTrack | null) => {
+      manualAudioOverrideRef.current = true;
       try {
         player.audioTrack = track;
         setNativeAudioId(track?.id ?? null);
@@ -674,7 +738,7 @@ export function usePlaybackEngine(
     setStatus("loading");
     void (async () => {
       try {
-        const res = await resolveStreams(subjectId, detailPath, season, episode);
+        const res = await resolveOriginalStreams(subjectId, detailPath, season, episode);
         setAvailableSources(res.sources);
         const picked =
           (current?.resolution
@@ -750,6 +814,7 @@ export function usePlaybackEngine(
     nativeSubtitleTracks,
     nativeAudioId,
     nativeSubtitleId,
+    country: effectiveCountry,
     nextCountdown,
     cancelAutoNext,
     loadCaptions,

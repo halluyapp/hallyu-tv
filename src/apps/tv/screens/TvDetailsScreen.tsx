@@ -10,7 +10,7 @@ import { palette, radius, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import { downloadManager } from "@/services/downloads/manager";
-import { resolveStreams } from "@/services/provider/adapter";
+import { resolveOriginalStreams } from "@/services/provider/adapter";
 import {
   hydrateDetail,
   loadDetailCached,
@@ -95,6 +95,7 @@ export function TvDetailsScreen() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const effectiveId = detail?.subjectId ?? subjectId;
+  const effectiveDetailPath = detail?.detailPath ?? detailPath;
   const effectiveTitle = detail?.title ?? initialTitle;
   const effectivePoster = detail?.posterUrl ?? initialPoster;
   const backdropUri = detail?.backdropUrl ?? effectivePoster;
@@ -112,8 +113,8 @@ export function TvDetailsScreen() {
     if (!detail) return;
     const se = isSeries ? (latestResume?.season_number ?? currentSeasonObj?.season ?? 1) : 0;
     const ep = isSeries ? (latestResume?.episode_number ?? 1) : 0;
-    prefetchStreams(effectiveId, detailPath, se, ep);
-  }, [currentSeasonObj?.season, detail, detailPath, effectiveId, isSeries, latestResume]);
+    prefetchStreams(effectiveId, effectiveDetailPath, se, ep);
+  }, [currentSeasonObj?.season, detail, effectiveDetailPath, effectiveId, isSeries, latestResume]);
 
   const episodeNumbers = useMemo(() => {
     const count = currentSeasonObj?.maxEp ?? 0;
@@ -124,13 +125,14 @@ export function TvDetailsScreen() {
   const startPlayback = useCallback(
     (seasonNum: number, episodeNum: number, resumeSeconds = 0) => {
       setDownloadToast(null);
-      const prefetched = takePrefetched(effectiveId, detailPath, seasonNum, episodeNum);
+      const prefetched = takePrefetched(effectiveId, effectiveDetailPath, seasonNum, episodeNum);
       const maxEp = detail?.seasons.find((s) => s.season === seasonNum)?.maxEp ?? 0;
       navigation.navigate("TvPlayer", {
         subjectId: effectiveId,
-        detailPath,
+        detailPath: effectiveDetailPath,
         title: effectiveTitle,
         posterUrl: effectivePoster,
+        country: detail?.country ?? null,
         mediaType: isSeries ? "series" : "movie",
         season: seasonNum,
         episode: episodeNum,
@@ -141,7 +143,7 @@ export function TvDetailsScreen() {
           isSeries && episodeNum < maxEp ? { season: seasonNum, episode: episodeNum + 1 } : null,
       });
     },
-    [detail?.seasons, detailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
+    [detail?.country, detail?.seasons, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
   );
 
   const handlePrimaryPlay = useCallback(() => {
@@ -160,7 +162,7 @@ export function TvDetailsScreen() {
     if (!detail?.trailerUrl) return;
     navigation.navigate("TvPlayer", {
       subjectId: effectiveId,
-      detailPath,
+      detailPath: effectiveDetailPath,
       title: `${effectiveTitle} · Trailer`,
       posterUrl: effectivePoster,
       mediaType: detail.mediaType,
@@ -178,20 +180,23 @@ export function TvDetailsScreen() {
           sizeBytes: null,
           durationSeconds: null,
           sourceLabel: "Trailer",
+          audioLanguage: null,
+          isDubbed: false,
+          isHindiDub: false,
           preview: false,
           verifiedFullLength: true,
         },
       ],
       nextEpisode: null,
     });
-  }, [detail, detailPath, effectiveId, effectivePoster, effectiveTitle, navigation]);
+  }, [detail, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, navigation]);
 
   const handleDownload = useCallback(async () => {
     const se = isSeries ? (latestResume?.season_number ?? selectedSeason) : 0;
     const ep = isSeries ? (latestResume?.episode_number ?? 1) : 0;
     setDownloadToast("Resolving progressive MP4 download…");
     try {
-      const res = await resolveStreams(effectiveId, detailPath, se, ep);
+      const res = await resolveOriginalStreams(effectiveId, effectiveDetailPath, se, ep);
       const mp4 =
         selectDownloadSource(res.sources, "720p") ?? selectDownloadSource(res.sources, null);
       if (!mp4) {
@@ -200,7 +205,7 @@ export function TvDetailsScreen() {
       }
       await downloadManager.enqueue({
         subjectId: effectiveId,
-        detailPath,
+        detailPath: effectiveDetailPath,
         title: effectiveTitle,
         posterUrl: effectivePoster,
         mediaType: isSeries ? "series" : "movie",
@@ -217,7 +222,7 @@ export function TvDetailsScreen() {
     } catch {
       setDownloadToast("Could not queue download. Check your connection and try again.");
     }
-  }, [detailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, latestResume, selectedSeason]);
+  }, [effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, latestResume, selectedSeason]);
 
   const ratingText = useMemo(() => {
     const n = detail?.rating ? parseFloat(detail.rating) : NaN;
@@ -410,7 +415,7 @@ export function TvDetailsScreen() {
               onPress={() =>
                 void toggleWatchlist({
                   subject_id: effectiveId,
-                  detail_path: detailPath,
+                  detail_path: effectiveDetailPath,
                   media_type: isSeries ? "series" : "movie",
                   title: effectiveTitle,
                   poster_url: effectivePoster,

@@ -1,5 +1,5 @@
 import type { CaptionTrack, StreamResolution } from "@/types/provider";
-import { fetchCaptions, resolveStreams } from "./adapter";
+import { fetchCaptions, resolveOriginalStreams } from "./adapter";
 
 /**
  * Parallel Stream + Subtitle Prefetch Engine.
@@ -101,7 +101,7 @@ export function prefetchStreams(
   if (inflightStreams.has(key)) return;
 
   inflightStreams.add(key);
-  void resolveStreams(subjectId, detailPath, season, episode)
+  void resolveOriginalStreams(subjectId, detailPath, season, episode)
     .then((result) => {
       streamEntries.set(key, { at: Date.now(), result });
       trimMap(streamEntries);

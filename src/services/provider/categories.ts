@@ -196,7 +196,7 @@ export interface WorldPageResult {
 const WORLD_FRESH_TTL_MS = 3 * 60 * 1000;
 
 export function peekWorldFirstPage(worldId: WorldId): CatalogueItem[] | null {
-  const mem = readCache<CatalogueItem[]>(`hallyu.world.v1.${worldId}`);
+  const mem = readCache<CatalogueItem[]>(`hallyu.world.v2.${worldId}`);
   if (mem && Array.isArray(mem.value) && mem.value.length > 0) {
     return mem.value;
   }
@@ -210,7 +210,7 @@ export function peekWorldFirstPage(worldId: WorldId): CatalogueItem[] | null {
 export async function hydrateWorldFirstPage(worldId: WorldId): Promise<CatalogueItem[] | null> {
   const sync = peekWorldFirstPage(worldId);
   if (sync) return sync;
-  const cached = await hydrateCache<CatalogueItem[]>(`hallyu.world.v1.${worldId}`);
+  const cached = await hydrateCache<CatalogueItem[]>(`hallyu.world.v2.${worldId}`);
   if (cached && Array.isArray(cached.value) && cached.value.length > 0) {
     return cached.value;
   }
@@ -228,7 +228,7 @@ export async function loadWorldPage(
   signal?: AbortSignal,
 ): Promise<WorldPageResult> {
   if (page === 1 && subFilter === "all") {
-    const existing = readCache<CatalogueItem[]>(`hallyu.world.v1.${worldId}`);
+    const existing = readCache<CatalogueItem[]>(`hallyu.world.v2.${worldId}`);
     if (
       existing &&
       Array.isArray(existing.value) &&
@@ -248,7 +248,7 @@ export async function loadWorldPage(
       searchCatalogue(query, 1, signal).catch(() => ({ items: [] as CatalogueItem[], page: 1, totalPages: 1 })),
     ]);
     const combined = dedupeItems([...flattenHomeSections(sections), ...searchRes.items]);
-    if (combined.length > 0) writeCache(`hallyu.world.v1.${worldId}`, combined);
+    if (combined.length > 0) writeCache(`hallyu.world.v2.${worldId}`, combined);
     return {
       items: combined,
       page: 1,
@@ -276,7 +276,7 @@ export async function loadWorldPage(
   items = applyClientSubFilter(items, subFilter);
 
   if (page === 1 && subFilter === "all" && items.length > 0) {
-    writeCache(`hallyu.world.v1.${worldId}`, items);
+    writeCache(`hallyu.world.v2.${worldId}`, items);
   }
 
   return {

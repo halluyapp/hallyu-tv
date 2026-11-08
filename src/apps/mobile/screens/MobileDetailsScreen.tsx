@@ -31,7 +31,7 @@ import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { downloadManager } from "@/services/downloads/manager";
 import { downloadKey } from "@/services/downloads/reasons";
 import type { DownloadJob } from "@/services/downloads/types";
-import { resolveStreams } from "@/services/provider/adapter";
+import { resolveOriginalStreams } from "@/services/provider/adapter";
 import {
   hydrateDetail,
   loadDetailCached,
@@ -137,6 +137,7 @@ export function MobileDetailsScreen() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const effectiveId = detail?.subjectId ?? subjectId;
+  const effectiveDetailPath = detail?.detailPath ?? detailPath;
   const effectiveTitle = detail?.title ?? initialTitle;
   const effectivePoster = detail?.posterUrl ?? initialPoster;
   const heroArt = effectivePoster ?? detail?.backdropUrl ?? null;
@@ -154,8 +155,8 @@ export function MobileDetailsScreen() {
     if (!detail) return;
     const se = isSeries ? (latestResume?.season_number ?? currentSeasonObj?.season ?? 1) : 0;
     const ep = isSeries ? (latestResume?.episode_number ?? 1) : 0;
-    prefetchStreams(effectiveId, detailPath, se, ep);
-  }, [currentSeasonObj?.season, detail, detailPath, effectiveId, isSeries, latestResume]);
+    prefetchStreams(effectiveId, effectiveDetailPath, se, ep);
+  }, [currentSeasonObj?.season, detail, effectiveDetailPath, effectiveId, isSeries, latestResume]);
 
   const episodeNumbers = useMemo(() => {
     const count = currentSeasonObj?.maxEp ?? 0;
@@ -174,13 +175,14 @@ export function MobileDetailsScreen() {
   const openPlayback = useCallback(
     (se: number, ep: number, resumeSeconds = 0) => {
       setToast(null);
-      const prefetched = takePrefetched(effectiveId, detailPath, se, ep);
+      const prefetched = takePrefetched(effectiveId, effectiveDetailPath, se, ep);
       const maxEp = detail?.seasons.find((s) => s.season === se)?.maxEp ?? 0;
       navigation.navigate("MobilePlayer", {
         subjectId: effectiveId,
-        detailPath,
+        detailPath: effectiveDetailPath,
         title: effectiveTitle,
         posterUrl: effectivePoster,
+        country: detail?.country ?? null,
         mediaType: isSeries ? "series" : "movie",
         season: se,
         episode: ep,
@@ -190,7 +192,7 @@ export function MobileDetailsScreen() {
         nextEpisode: isSeries && ep < maxEp ? { season: se, episode: ep + 1 } : null,
       });
     },
-    [detail?.seasons, detailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
+    [detail?.country, detail?.seasons, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
   );
 
   const handlePrimaryPlay = useCallback(() => {
@@ -209,7 +211,7 @@ export function MobileDetailsScreen() {
     async (se: number, ep: number) => {
       setToast("Resolving progressive MP4…");
       try {
-        const res = await resolveStreams(effectiveId, detailPath, se, ep);
+        const res = await resolveOriginalStreams(effectiveId, effectiveDetailPath, se, ep);
         const mp4 = selectDownloadSource(res.sources, null);
         if (!mp4) {
           setToast("No progressive MP4 available for offline saving.");
@@ -217,7 +219,7 @@ export function MobileDetailsScreen() {
         }
         await downloadManager.enqueue({
           subjectId: effectiveId,
-          detailPath,
+          detailPath: effectiveDetailPath,
           title: effectiveTitle,
           posterUrl: effectivePoster,
           mediaType: isSeries ? "series" : "movie",
@@ -231,7 +233,7 @@ export function MobileDetailsScreen() {
         setToast("Could not start download. Check your network and try again.");
       }
     },
-    [detailPath, effectiveId, effectivePoster, effectiveTitle, isSeries],
+    [effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries],
   );
 
   const handleSpeakSynopsis = useCallback(() => {
@@ -256,7 +258,7 @@ export function MobileDetailsScreen() {
     }
     navigation.navigate("MobilePlayer", {
       subjectId: effectiveId,
-      detailPath,
+      detailPath: effectiveDetailPath,
       title: `${effectiveTitle} · Trailer`,
       posterUrl: effectivePoster,
       mediaType: detail.mediaType,
@@ -274,13 +276,16 @@ export function MobileDetailsScreen() {
           sizeBytes: null,
           durationSeconds: null,
           sourceLabel: "Trailer",
+          audioLanguage: null,
+          isDubbed: false,
+          isHindiDub: false,
           preview: false,
           verifiedFullLength: true,
         },
       ],
       nextEpisode: null,
     });
-  }, [detail, detailPath, effectiveId, effectivePoster, effectiveTitle, navigation]);
+  }, [detail, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, navigation]);
 
   const ratingText = useMemo(() => {
     const n = detail?.rating ? parseFloat(detail.rating) : NaN;
@@ -475,7 +480,7 @@ export function MobileDetailsScreen() {
                     play("confirm", { intensity: 0.4 });
                     void toggleWatchlist({
                       subject_id: effectiveId,
-                      detail_path: detailPath,
+                      detail_path: effectiveDetailPath,
                       media_type: isSeries ? "series" : "movie",
                       title: effectiveTitle,
                       poster_url: effectivePoster,

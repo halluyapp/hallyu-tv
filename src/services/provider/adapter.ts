@@ -1,4 +1,12 @@
 import { providerFetch, PROVIDER_MEDIA_HEADERS } from "./client";
+import {
+  cleanBaseTitle,
+  filterOriginalCatalogueItems,
+  isDubbedMetadata,
+  normalizeTitleKey,
+  parseDubSiblings,
+  pickOriginalDubSibling,
+} from "./originalAudio";
 import { normalizeStreamResponse, selectableSources, streamEndpoint } from "./streams";
 import {
   CaptionTrack,
@@ -25,20 +33,32 @@ function unwrap(raw: unknown): Record<string, unknown> {
 export async function fetchHome(signal?: AbortSignal): Promise<HomeSection[]> {
   const raw = await providerFetch("/home", { signal });
   const data = unwrap(raw);
-  const rawSections = Array.isArray(data.sections) ? data.sections : Array.isArray((raw as Record<string, unknown>)?.sections) ? (raw as { sections: unknown[] }).sections : [];
+  const rawSections = Array.isArray(data.sections)
+    ? data.sections
+    : Array.isArray((raw as Record<string, unknown>)?.sections)
+      ? (raw as { sections: unknown[] }).sections
+      : [];
   const sections: HomeSection[] = [];
   const seenLabels = new Set<string>();
   for (const s of rawSections) {
     if (typeof s !== "object" || s === null) continue;
     const section = s as Record<string, unknown>;
-    const label = isNonEmptyString(section.section) ? section.section : isNonEmptyString(section.title) ? section.title : null;
+    const label = isNonEmptyString(section.section)
+      ? section.section
+      : isNonEmptyString(section.title)
+        ? section.title
+        : null;
     if (!label || !Array.isArray(section.items) || seenLabels.has(label)) continue;
+    // Skip entire Hindi/regional dub-only rails if Moviebox ever injects one
+    if (/\bhindi\s+dub|\bdubbed\s+in\s+hindi/i.test(label)) continue;
+
     const items = section.items.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
     const seen = new Set<string>();
     const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
-    if (unique.length === 0) continue;
+    const originalsOnly = filterOriginalCatalogueItems(unique);
+    if (originalsOnly.length === 0) continue;
     seenLabels.add(label);
-    sections.push({ section: label, items: unique });
+    sections.push({ section: label, items: originalsOnly });
   }
   return sections;
 }
@@ -56,24 +76,109 @@ export async function searchCatalogue(query: string, page = 1, signal?: AbortSig
   const items = rawItems.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
   const seen = new Set<string>();
   const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
-  const totalPages = typeof data.total_pages === "number" ? data.total_pages : typeof data.totalPages === "number" ? data.totalPages : 1;
-  return { items: unique, page, totalPages };
+  const filtered = filterOriginalCatalogueItems(unique, { query });
+  const totalPages =
+    typeof data.total_pages === "number"
+      ? data.total_pages
+      : typeof data.totalPages === "number"
+        ? data.totalPages
+        : 1;
+  return { items: filtered, page, totalPages };
 }
 
-export async function fetchDetail(detailPath: string, signal?: AbortSignal): Promise<TitleDetail> {
+async function fetchDetailInternal(
+  detailPath: string,
+  signal?: AbortSignal,
+  allowOriginalRedirect = true,
+): Promise<TitleDetail> {
   const raw = await providerFetch(`/detail/${encodeURIComponent(detailPath)}`, { signal });
   const data = unwrap(raw);
-  const subject = (typeof data.subject === "object" && data.subject !== null ? data.subject : data) as Record<string, any>;
+  const subject = (
+    typeof data.subject === "object" && data.subject !== null ? data.subject : data
+  ) as Record<string, any>;
   if (!isNonEmptyString(subject.subjectId) || !isNonEmptyString(subject.title)) {
     throw new ProviderError("invalid_response", "Title data is incomplete.");
   }
 
-  const resource = (typeof data.resource === "object" && data.resource !== null ? data.resource : {}) as Record<string, any>;
-  const rawSeasons = Array.isArray(resource.seasons) ? resource.seasons : Array.isArray(subject.seasons) ? subject.seasons : [];
+  const resource = (
+    typeof data.resource === "object" && data.resource !== null ? data.resource : {}
+  ) as Record<string, any>;
+  const resolvedSlug = isNonEmptyString(subject.detailPath) ? subject.detailPath : detailPath;
+  const country = isNonEmptyString(subject.countryName) ? subject.countryName : null;
+
+  // Canonicalize Hindi / regional dubbed subjects to their Original Audio release!
+  if (allowOriginalRedirect) {
+    const dubs = parseDubSiblings(subject, data, resource);
+    const originalSibling = pickOriginalDubSibling({
+      currentSubjectId: subject.subjectId,
+      currentTitle: subject.title,
+      currentSlug: resolvedSlug,
+      country,
+      dubs,
+    });
+
+    if (originalSibling && originalSibling.detailPath !== resolvedSlug) {
+      try {
+        return await fetchDetailInternal(originalSibling.detailPath, signal, false);
+      } catch {
+        // If sibling lookup fails, continue to clean-title fallback or current detail
+      }
+    }
+
+    if (
+      isDubbedMetadata({
+        title: subject.title,
+        slug: resolvedSlug,
+        country,
+      })
+    ) {
+      const baseTitle = cleanBaseTitle(subject.title);
+      const wantedKey = normalizeTitleKey(baseTitle);
+      const rawSeasonsCheck = Array.isArray(resource.seasons)
+        ? resource.seasons
+        : Array.isArray(subject.seasons)
+          ? subject.seasons
+          : [];
+      const wantedMediaType = rawSeasonsCheck.length > 0 || subject.subjectType === 2 ? "series" : "movie";
+      const wantedYear = isNonEmptyString(subject.releaseDate) ? subject.releaseDate.slice(0, 4) : null;
+
+      if (baseTitle.length >= 2 && wantedKey.length >= 2) {
+        try {
+          const searchRes = await searchCatalogue(baseTitle, 1, signal);
+          const cleanMatch =
+            searchRes.items.find(
+              (item) =>
+                item.subjectId !== subject.subjectId &&
+                item.mediaType === wantedMediaType &&
+                normalizeTitleKey(item.name) === wantedKey &&
+                (!wantedYear || !item.year || item.year === wantedYear),
+            ) ??
+            searchRes.items.find(
+              (item) =>
+                item.subjectId !== subject.subjectId &&
+                item.mediaType === wantedMediaType &&
+                normalizeTitleKey(item.name) === wantedKey,
+            );
+          if (cleanMatch) {
+            return await fetchDetailInternal(cleanMatch.slug, signal, false);
+          }
+        } catch {
+          // Non-fatal fallback
+        }
+      }
+    }
+  }
+
+  const rawSeasons = Array.isArray(resource.seasons)
+    ? resource.seasons
+    : Array.isArray(subject.seasons)
+      ? subject.seasons
+      : [];
   const seasons: SeasonInfo[] = rawSeasons
     .map((s: any) => {
       const season = typeof s?.se === "number" ? s.se : typeof s?.season === "number" ? s.season : null;
-      const maxEp = typeof s?.maxEp === "number" ? s.maxEp : typeof s?.episodeCount === "number" ? s.episodeCount : null;
+      const maxEp =
+        typeof s?.maxEp === "number" ? s.maxEp : typeof s?.episodeCount === "number" ? s.episodeCount : null;
       return season !== null && maxEp !== null && maxEp > 0 ? { season, maxEp } : null;
     })
     .filter((s): s is SeasonInfo => s !== null);
@@ -82,7 +187,11 @@ export async function fetchDetail(detailPath: string, signal?: AbortSignal): Pro
     ? data.stars
         .map((s: any) =>
           isNonEmptyString(s?.name)
-            ? { name: s.name, character: isNonEmptyString(s.character) ? s.character : null, avatarUrl: isNonEmptyString(s.avatarUrl) ? s.avatarUrl : null }
+            ? {
+                name: s.name,
+                character: isNonEmptyString(s.character) ? s.character : null,
+                avatarUrl: isNonEmptyString(s.avatarUrl) ? s.avatarUrl : null,
+              }
             : null,
         )
         .filter((s): s is StarInfo => s !== null)
@@ -93,29 +202,38 @@ export async function fetchDetail(detailPath: string, signal?: AbortSignal): Pro
 
   return {
     subjectId: subject.subjectId,
-    title: subject.title,
+    title: cleanBaseTitle(subject.title) || subject.title,
     description: isNonEmptyString(subject.description) ? subject.description : null,
     releaseDate: isNonEmptyString(subject.releaseDate) ? subject.releaseDate : null,
     genre: isNonEmptyString(subject.genre) ? subject.genre : null,
-    country: isNonEmptyString(subject.countryName) ? subject.countryName : null,
+    country,
     rating: isNonEmptyString(subject.imdbRatingValue) ? subject.imdbRatingValue : null,
     posterUrl: isNonEmptyString(subject.cover?.url) ? subject.cover.url : null,
     backdropUrl: isNonEmptyString(subject.trailer?.cover?.url) ? subject.trailer.cover.url : null,
     trailerUrl: isNonEmptyString(trailerUrl) ? trailerUrl : null,
-    detailPath: isNonEmptyString(subject.detailPath) ? subject.detailPath : detailPath,
+    detailPath: resolvedSlug,
     mediaType,
     seasons,
     subtitlesAvailable: isNonEmptyString(subject.subtitles)
-      ? subject.subtitles.split(",").map((s: string) => s.trim()).filter(Boolean)
+      ? subject.subtitles
+          .split(",")
+          .map((s: string) => s.trim())
+          .filter(Boolean)
       : [],
     cast,
   };
+}
+
+export async function fetchDetail(detailPath: string, signal?: AbortSignal): Promise<TitleDetail> {
+  return fetchDetailInternal(detailPath, signal, true);
 }
 
 /**
  * Resolve playable sources through the required Zarhosting endpoint:
  * GET /stream/{subject_id}?detail_path=&se=&ep=
  * Movies use se=0&ep=0; series pass the selected season/episode.
+ * If `detailPath` is a dubbed slug (e.g. from older local history), automatically
+ * resolves the Original Audio sibling before requesting streams!
  */
 export async function resolveStreams(
   subjectId: string,
@@ -130,6 +248,7 @@ export async function resolveStreams(
   if (!Number.isInteger(se) || se < 0 || !Number.isInteger(ep) || ep < 0) {
     throw new ProviderError("invalid_response", "Season and episode must be non-negative integers.");
   }
+
   const raw = await providerFetch(streamEndpoint(subjectId, detailPath, se, ep), {
     timeoutMs: 20_000,
     signal,
@@ -138,7 +257,10 @@ export async function resolveStreams(
   if (selectableSources(n.sources).length === 0) {
     throw new ProviderError(
       "no_stream",
-      n.note ?? (n.hasResource ? "No playable source was returned for this selection." : "No stream is available for this title right now."),
+      n.note ??
+        (n.hasResource
+          ? "No playable source was returned for this selection."
+          : "No stream is available for this title right now."),
     );
   }
   return {
@@ -149,6 +271,33 @@ export async function resolveStreams(
     hasResource: n.hasResource,
     note: n.note,
   };
+}
+
+/**
+ * Original-Audio-enforced stream resolver used by Player, Prefetcher & Downloader:
+ * if `detailPath` is a Hindi/regional dub slug (e.g. `attack-on-titan-hindi-...`
+ * from older local history or 0ms instant launch), automatically canonicalizes
+ * to the Original Audio `subjectId` + `detailPath` before requesting `/stream`!
+ */
+export async function resolveOriginalStreams(
+  subjectId: string,
+  detailPath: string,
+  se = 0,
+  ep = 0,
+  signal?: AbortSignal,
+): Promise<StreamResolution> {
+  let targetSubjectId = subjectId;
+  let targetDetailPath = detailPath;
+  if (isDubbedMetadata({ slug: detailPath })) {
+    try {
+      const canonical = await fetchDetail(detailPath, signal);
+      targetSubjectId = canonical.subjectId;
+      targetDetailPath = canonical.detailPath;
+    } catch {
+      // Fallback to provided identifiers if detail lookup fails
+    }
+  }
+  return resolveStreams(targetSubjectId, targetDetailPath, se, ep, signal);
 }
 
 export async function fetchCaptions(
@@ -171,7 +320,11 @@ export async function fetchCaptions(
     if (!url || !/^https:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
     const language = isNonEmptyString(r.lan) ? r.lan : isNonEmptyString(r.language) ? r.language : "unknown";
-    const languageName = isNonEmptyString(r.lanName) ? r.lanName : isNonEmptyString(r.languageName) ? r.languageName : language;
+    const languageName = isNonEmptyString(r.lanName)
+      ? r.lanName
+      : isNonEmptyString(r.languageName)
+        ? r.languageName
+        : language;
     tracks.push({
       id: isNonEmptyString(r.id) ? r.id : `${language}-${tracks.length}`,
       language,

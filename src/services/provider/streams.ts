@@ -1,11 +1,14 @@
+import { isDubbedMetadata, isHindiDubMetadata } from "./originalAudio";
+
 /**
- * Shared Zarhosting stream normalization + selection. Pure TypeScript so the
- * app, verification script and unit tests run identical rules.
+ * Shared Zarhosting stream normalization + Original-Audio-first selection.
+ * Pure TypeScript so the app, verification script and unit tests run identical rules.
  *
  * Accepted response shapes:
  *   { subject_id, se, ep, has_resource, sources|streams: [...], hls, dash, note }
  * optionally nested under `data`. Source entries may report size as bytes
- * (`size`, `size_bytes`) or megabytes (`size_mb`), and duration in seconds.
+ * (`size`, `size_bytes`) or megabytes (`size_mb`), duration in seconds, and
+ * optional audio/dub language metadata (`audio`, `lang`, `lan`, `lanName`, `dub`).
  */
 
 export const FULL_LENGTH_MIN_DURATION_S = 300;
@@ -20,6 +23,9 @@ export interface NormalizedSource {
   sizeBytes: number | null;
   durationSeconds: number | null;
   sourceLabel: string | null;
+  audioLanguage: string | null;
+  isDubbed: boolean;
+  isHindiDub: boolean;
   preview: boolean;
   verifiedFullLength: boolean | null;
 }
@@ -112,12 +118,31 @@ function detectFormat(rawFormat: string | null, url: string): string {
   return "MP4";
 }
 
-/** MP4 before other formats, then quality descending. */
+function audioPenalty(s: NormalizedSource): number {
+  if (s.isHindiDub) return 2;
+  if (s.isDubbed) return 1;
+  return 0;
+}
+
+/** Original audio first, then MP4 before other formats, then quality descending. */
 export function compareSources(a: NormalizedSource, b: NormalizedSource): number {
+  const ap = audioPenalty(a);
+  const bp = audioPenalty(b);
+  if (ap !== bp) return ap - bp;
   const fa = a.format.toUpperCase() === "MP4" ? 0 : 1;
   const fb = b.format.toUpperCase() === "MP4" ? 0 : 1;
   if (fa !== fb) return fa - fb;
   return (b.qualityValue ?? 0) - (a.qualityValue ?? 0);
+}
+
+function detectUrlHindiHint(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const combined = `${parsed.pathname}${parsed.search}`.toLowerCase();
+    return /(?:^|[\/_\-.=&?])(?:hindi|hin[-_]dub|audio=hi|lang=hi|lan=hi)(?:$|[\/_\-.=&?])/i.test(combined);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeEntry(entry: unknown): NormalizedSource | null {
@@ -125,7 +150,7 @@ function normalizeEntry(entry: unknown): NormalizedSource | null {
   const url = str(s.url) ?? str(s.playback_url) ?? str(s.file);
   if (!url || !isHttpsUrl(url)) return null;
 
-  const resolution = str(s.resolution) ?? str(s.resolutions) ?? str(s.quality) ?? str(s.label);
+  const rawResolution = str(s.resolution) ?? str(s.resolutions) ?? str(s.quality) ?? str(s.label);
   const sizeBytes =
     s.size_bytes !== undefined
       ? normalizeSizeBytes(s.size_bytes, "bytes")
@@ -134,24 +159,79 @@ function normalizeEntry(entry: unknown): NormalizedSource | null {
         : normalizeSizeBytes(s.size, "auto");
   const durationSeconds = normalizeDurationSeconds(s.duration ?? s.duration_sec);
   const sourceLabel = str(s.source) ?? str(s.source_label);
-  const preview = looksLikePreview(sourceLabel, resolution);
+  const audioCode =
+    str(s.audio_lang) ??
+    str(s.audioLang) ??
+    str(s.lan) ??
+    str(s.lanCode) ??
+    str(s.lang) ??
+    str(s.language);
+  const audioName =
+    str(s.audio) ??
+    str(s.lanName) ??
+    str(s.lan_name) ??
+    str(s.dub) ??
+    str(s.track_name) ??
+    str(s.track) ??
+    str(s.title) ??
+    str(s.name);
+
+  const combinedMeta = [sourceLabel, rawResolution, audioName].filter(Boolean).join(" ");
+  const explicitlyOriginal =
+    Boolean(combinedMeta && /\boriginal\b/i.test(combinedMeta)) ||
+    Boolean(audioCode && /^orig/i.test(audioCode));
+
+  const isHindiDub =
+    !explicitlyOriginal &&
+    (detectUrlHindiHint(url) ||
+      isHindiDubMetadata({
+        title: combinedMeta ? `[${combinedMeta}]` : null,
+        badge: sourceLabel,
+        lanCode: audioCode,
+        lanName: audioName ?? rawResolution,
+      }));
+
+  const isDubbed =
+    !explicitlyOriginal &&
+    (isHindiDub ||
+      s.is_dub === true ||
+      s.isDub === true ||
+      isDubbedMetadata({
+        title: combinedMeta ? `[${combinedMeta}]` : null,
+        badge: sourceLabel,
+        lanCode: audioCode,
+        lanName: audioName,
+      }));
+
+  // Normalize e.g. "1080p (Hindi)" -> "1080p" when resolution carries a quality number + language tag
+  const qv = num(s.quality_value) ?? qualityValue(rawResolution);
+  const resolution =
+    rawResolution && qv !== null && /[a-z]{3,}/i.test(rawResolution.replace(/\d+\s*p/i, ""))
+      ? `${qv}p`
+      : rawResolution;
+
+  const preview = looksLikePreview(sourceLabel, rawResolution);
   const format = detectFormat(str(s.format), url);
 
   return {
     url,
     resolution,
-    qualityValue: num(s.quality_value) ?? qualityValue(resolution),
+    qualityValue: qv,
     format,
     codec: str(s.codec) ?? str(s.codecName),
     sizeBytes,
     durationSeconds,
     sourceLabel,
+    audioLanguage: audioName ?? audioCode ?? null,
+    isDubbed,
+    isHindiDub,
     preview,
     verifiedFullLength: classifyFullLength({ sourceLabel, durationSeconds, sizeBytes }),
   };
 }
 
 function manifestSource(url: string, format: "HLS" | "DASH"): NormalizedSource {
+  const isHindi = detectUrlHindiHint(url);
   return {
     url,
     resolution: null,
@@ -161,6 +241,9 @@ function manifestSource(url: string, format: "HLS" | "DASH"): NormalizedSource {
     sizeBytes: null,
     durationSeconds: null,
     sourceLabel: format,
+    audioLanguage: null,
+    isDubbed: isHindi,
+    isHindiDub: isHindi,
     preview: false,
     verifiedFullLength: null,
   };
@@ -191,7 +274,11 @@ export function normalizeStreamResponse(raw: unknown): NormalizedStreams {
     };
   }
 
-  const rawList = Array.isArray(body.sources) ? body.sources : Array.isArray(body.streams) ? body.streams : [];
+  const rawList = Array.isArray(body.sources)
+    ? body.sources
+    : Array.isArray(body.streams)
+      ? body.streams
+      : [];
   const sources: NormalizedSource[] = [];
   const seen = new Set<string>();
   for (const entry of rawList) {
@@ -224,11 +311,23 @@ export function normalizeStreamResponse(raw: unknown): NormalizedStreams {
   };
 }
 
-/** Full-length candidates first, then unverified; previews are never offered. */
+/**
+ * Full-length Original Audio candidates first, then unverified Original Audio;
+ * Hindi / dubbed sources are completely excluded whenever ANY Original/undubbed
+ * source exists! Previews are never offered.
+ */
 export function selectableSources(sources: NormalizedSource[]): NormalizedSource[] {
   const full = sources.filter((s) => !s.preview && s.verifiedFullLength === true);
   const unverified = sources.filter((s) => !s.preview && s.verifiedFullLength === null);
-  return [...full, ...unverified];
+  const allValid = [...full, ...unverified];
+
+  const originals = allValid.filter((s) => !s.isHindiDub && !s.isDubbed);
+  if (originals.length > 0) return originals;
+
+  const nonHindi = allValid.filter((s) => !s.isHindiDub);
+  if (nonHindi.length > 0) return nonHindi;
+
+  return allValid;
 }
 
 /** Progressive MP4 only — manifests cannot be saved as offline video files. */
@@ -241,7 +340,13 @@ export function downloadableSources(sources: NormalizedSource[]): NormalizedSour
 }
 
 export function qualityOptions(sources: NormalizedSource[]): string[] {
-  return [...new Set(selectableSources(sources).map((s) => s.resolution).filter((q): q is string => q !== null))];
+  return [
+    ...new Set(
+      selectableSources(sources)
+        .map((s) => s.resolution)
+        .filter((q): q is string => q !== null),
+    ),
+  ];
 }
 
 function pickFrom(pool: NormalizedSource[], requested?: string | null): NormalizedSource | null {
@@ -258,13 +363,13 @@ function pickFrom(pool: NormalizedSource[], requested?: string | null): Normaliz
   return target[target.length - 1] ?? null;
 }
 
-/** Data-conscious default: requested quality, else verified 360p, else lowest. */
+/** Data-conscious default: requested quality, else verified 360p, else lowest (always Original Audio first). */
 export function selectSource(sources: NormalizedSource[], requested?: string | null): NormalizedSource | null {
   return pickFrom(selectableSources(sources), requested);
 }
 
 /**
- * Platform- & viewer-preference-aware source picker:
+ * Platform- & viewer-preference-aware Original Audio source picker:
  * - Explicit resolution ("1080p" | "720p" | "480p" | "360p"): picks exact match or closest <= rung.
  * - "auto" on TV (`isTv === true`): prefers highest verified full-length HD (1080p -> 720p -> 480p -> best).
  * - "auto" on Mobile (`isTv === false`): uses data-conscious verified 360p default.
@@ -284,7 +389,9 @@ export function selectPreferredSource(
     if (exact) return exact;
     const wantedNum = qualityValue(preference) ?? 0;
     const sortedDesc = [...target].sort((a, b) => (b.qualityValue ?? 0) - (a.qualityValue ?? 0));
-    const lowerOrEqual = sortedDesc.find((s) => (s.qualityValue ?? 0) > 0 && (s.qualityValue ?? 0) <= wantedNum);
+    const lowerOrEqual = sortedDesc.find(
+      (s) => (s.qualityValue ?? 0) > 0 && (s.qualityValue ?? 0) <= wantedNum,
+    );
     if (lowerOrEqual) return lowerOrEqual;
     return sortedDesc[sortedDesc.length - 1] ?? null;
   }
@@ -303,16 +410,14 @@ export function selectPreferredSource(
   return selectSource(sources, null);
 }
 
-/** Downloads require progressive MP4. An explicit requested quality that is not
- * downloadable returns null instead of silently substituting another source;
- * callers can fall back to the default download rule with no requested quality. */
+/** Downloads require progressive MP4 (Original Audio prioritized). */
 export function selectDownloadSource(sources: NormalizedSource[], requested?: string | null): NormalizedSource | null {
   const candidates = downloadableSources(sources);
   if (requested) return candidates.find((s) => s.resolution === requested) ?? null;
   return pickFrom(candidates, null);
 }
 
-/** Fresh-link recovery: same quality on an untried URL first, then default rule. */
+/** Fresh-link recovery: same quality on an untried Original Audio URL first, then default rule. */
 export function pickRecoverySource(
   sources: NormalizedSource[],
   triedUrls: ReadonlySet<string>,
