@@ -1,54 +1,53 @@
 import { PosterCard } from "@/components/ui/PosterCard";
 import { EmptyState, ErrorState, SkeletonRail } from "@/components/ui/States";
 import { AmbientGlow } from "@/components/ui/AmbientGlow";
-import { palette, radius, spacing, gradients } from "@/design-system/tokens";
-import { CatalogueItem, HomeSection, ProviderError } from "@/types/provider";
-import { fetchHome, searchCatalogue } from "@/services/provider/adapter";
-import { useNavigation } from "@react-navigation/native";
+import { gradients, palette, radius, spacing } from "@/design-system/tokens";
+import { useCatalogueBrowser, type ContentType } from "@/hooks/useCatalogueBrowser";
 import { useStage } from "@/hooks/useStage";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Search as SearchIcon, X } from "lucide-react-native";
+import { RootStackParamList, TabParamList } from "@/navigation/RootNavigator";
+import { BROWSE_WORLDS } from "@/services/catalogue/worlds";
+import type { BottomTabNavigationProp } from "@react-navigation/bottom-tabs";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { LinearGradient } from "expo-linear-gradient";
-import { RootStackParamList } from "@/navigation/RootNavigator";
+import { Search as SearchIcon, X } from "lucide-react-native";
+import React, { useEffect } from "react";
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type Nav = NativeStackNavigationProp<RootStackParamList>;
+type Nav = NativeStackNavigationProp<RootStackParamList> & BottomTabNavigationProp<TabParamList, "Discover">;
 
-const MOODS: { label: string; query: string }[] = [
-  { label: "Trending", query: "Trending" },
-  { label: "Adrenaline", query: "Action" },
-  { label: "Slow Burn", query: "Drama" },
-  { label: "Mind-Bending", query: "Sci-Fi" },
-  { label: "Feel-Good", query: "Comedy" },
-  { label: "Late Night", query: "Thriller" },
-  { label: "Romantic", query: "Romance" },
-  { label: "Animation", query: "Anime" },
+const WORLD_CHIPS = BROWSE_WORLDS.filter((world) => world.key !== "shorts");
+
+const TYPES: { key: ContentType; label: string }[] = [
+  { key: "all", label: "All types" },
+  { key: "movie", label: "Movies" },
+  { key: "series", label: "Series" },
 ];
 
+/**
+ * Explore — real category browsing plus title search.
+ *
+ * A world or genre chip filters the catalogue by metadata; it is never sent to
+ * the provider's title-search endpoint. Search and browsing stay separate, and
+ * both combine with the type filter.
+ */
 export function DiscoverScreen() {
-  const [sections, setSections] = useState<HomeSection[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [selectedMood, setSelectedMood] = useState<string | null>(null);
-  const [results, setResults] = useState<CatalogueItem[] | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, loadingMore: false });
-  const navigation = useNavigation<Nav>();
-  const insets = useSafeAreaInsets();
   const stage = useStage();
-  const inputRef = useRef<TextInput>(null);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const insets = useSafeAreaInsets();
+  const navigation = useNavigation<Nav>();
+  const route = useRoute<RouteProp<TabParamList, "Discover">>();
+  const browser = useCatalogueBrowser();
+
+  const { setWorld, setGenre } = browser;
+
+  // Deep links from Home ("See all", world chips) drive the filters.
+  useEffect(() => {
+    const params = route.params;
+    if (!params) return;
+    if (params.world) setWorld(params.world);
+    if (params.genre !== undefined) setGenre(params.genre ?? null);
+  }, [route.params, setWorld, setGenre]);
 
   const columns = stage.tier === "compact" ? 3 : stage.tier === "regular" ? 4 : 5;
   const cardWidth =
@@ -56,185 +55,182 @@ export function DiscoverScreen() {
       ? stage.posterWidth
       : Math.round((stage.width - stage.gutter * 2 - spacing.md * (columns - 1)) / columns);
 
-  useEffect(() => {
-    fetchHome()
-      .then(setSections)
-      .catch((err) => setError(err instanceof ProviderError ? err.message : "Could not load categories."));
-  }, []);
+  const genres = browser.snapshot?.genres ?? [];
+  const empty = !browser.loading && !browser.searching && browser.items.length === 0;
 
-  const runSearch = useCallback(async (q: string, pageNum = 1) => {
-    const term = q.trim();
-    if (term.length < 2) {
-      setResults(null);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    try {
-      const page = await searchCatalogue(term, pageNum);
-      setResults((prev) => (pageNum === 1 ? page.items : [...(prev ?? []), ...page.items]));
-      setPagination({ page: page.page, totalPages: page.totalPages, loadingMore: false });
-    } catch {
-      setResults(pageNum === 1 ? [] : results);
-    } finally {
-      setSearching(false);
-    }
-  }, [results]);
-
-  const onQueryChange = (text: string) => {
-    setQuery(text);
-    setSelectedMood(null);
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => void runSearch(text, 1), 400);
-  };
-
-  const clearSearch = () => {
-    setQuery("");
-    setSelectedMood(null);
-    setResults(null);
-  };
-
-  const onPickMood = (mood: { label: string; query: string }) => {
-    if (selectedMood === mood.label) {
-      setSelectedMood(null);
-      setResults(null);
-      return;
-    }
-    setSelectedMood(mood.label);
-    setQuery("");
-    void runSearch(mood.query, 1);
-  };
-
-  const loadMore = () => {
-    if (searching || pagination.loadingMore || pagination.page >= pagination.totalPages) return;
-    const term = (query || selectedMood || "").trim();
-    if (!term) return;
-    setPagination((prev) => ({ ...prev, loadingMore: true }));
-    void runSearch(term, pagination.page + 1);
-  };
-
-  const openDetails = (slug: string, subjectId: string) => {
-    navigation.navigate("Details", { detailPath: slug, subjectId });
-  };
-
-  const catalogueItems = useMemo(() => {
-    if (results !== null) return results;
-    if (!sections) return [];
-    const pool = sections.flatMap((s) => s.items);
-    const seen = new Set<string>();
-    return pool.filter((it) => (seen.has(it.subjectId) ? false : (seen.add(it.subjectId), true)));
-  }, [results, sections]);
-
-  return (
-    <View style={[styles.root, { paddingTop: insets.top + spacing.xs }]}>
-      <AmbientGlow />
-
-      {/* Spatial Liquid Search Header */}
+  const header = (
+    <View>
       <View style={[styles.header, { paddingHorizontal: stage.gutter }]}>
         <View style={styles.searchBar}>
           <SearchIcon size={18} color={palette.textSecondary} />
           <TextInput
-            ref={inputRef}
-            value={query}
-            onChangeText={onQueryChange}
-            placeholder="Search films, series, genres..."
+            value={browser.query}
+            onChangeText={browser.setQuery}
+            placeholder="Search films, series, genres…"
             placeholderTextColor={palette.textMuted}
             style={styles.searchInput}
             returnKeyType="search"
             autoCorrect={false}
+            accessibilityLabel="Search titles"
           />
-          {searching ? (
-            <ActivityIndicator size="small" color={palette.accent} />
-          ) : query.length > 0 ? (
-            <Pressable onPress={clearSearch} hitSlop={10}>
+          {browser.query.length > 0 ? (
+            <Pressable onPress={() => browser.setQuery("")} hitSlop={10} accessibilityLabel="Clear search">
               <X size={18} color={palette.textSecondary} />
             </Pressable>
           ) : null}
         </View>
       </View>
 
-      {/* Horizontally scrollable Mood / Genre Liquid Pills */}
-      <View style={styles.moodsContainer}>
+      <View style={styles.chipsContainer}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: stage.gutter, gap: 8 }}
         >
-          {MOODS.map((m) => {
-            const isActive = selectedMood === m.label;
+          {WORLD_CHIPS.map((world) => {
+            const active = browser.filters.world === world.key;
             return (
               <Pressable
-                key={m.label}
-                onPress={() => onPickMood(m)}
-                style={[
-                  styles.moodPill,
-                  isActive ? styles.moodPillActive : styles.moodPillInactive,
-                ]}
+                key={world.key}
+                onPress={() => setWorld(world.key)}
+                style={[styles.pill, active ? styles.pillActive : styles.pillInactive]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
               >
-                {isActive && (
+                {active ? (
                   <LinearGradient
                     colors={gradients.accent}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={StyleSheet.absoluteFillObject}
                   />
-                )}
-                <Text style={[styles.moodLabel, isActive && styles.moodLabelActive]}>
-                  {m.label}
-                </Text>
+                ) : null}
+                <Text style={[styles.pillLabel, active && styles.pillLabelActive]}>{world.label}</Text>
               </Pressable>
             );
           })}
         </ScrollView>
       </View>
 
-      {/* Grid of Results / Catalogue */}
-      {error && !sections ? (
-        <ErrorState message={error} onRetry={() => void fetchHome().then(setSections)} />
-      ) : (
-        <FlatList
-          data={catalogueItems}
-          keyExtractor={(item) => item.subjectId}
-          numColumns={columns}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.grid, { paddingHorizontal: stage.gutter, paddingBottom: 110 }]}
-          columnWrapperStyle={{ gap: spacing.md, marginBottom: spacing.md }}
-          renderItem={({ item }) => (
-            <PosterCard item={item} width={cardWidth} onPress={() => openDetails(item.slug, item.subjectId)} />
-          )}
-          onEndReached={loadMore}
-          onEndReachedThreshold={0.5}
-          ListEmptyComponent={
-            searching ? (
-              <SkeletonRail count={6} itemWidth={cardWidth} />
-            ) : results !== null && results.length === 0 ? (
-              <EmptyState
-                title="No titles found"
-                message={`We couldn't find any films matching "${query || selectedMood}". Try another keyword or category.`}
-              />
-            ) : null
-          }
-          ListFooterComponent={
-            pagination.loadingMore ? (
-              <View style={{ paddingVertical: spacing.lg, alignItems: "center" }}>
-                <ActivityIndicator color={palette.accent} size="small" />
-              </View>
-            ) : null
-          }
-        />
-      )}
+      {genres.length > 0 ? (
+        <View style={styles.genreContainer}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: stage.gutter, gap: 8 }}
+          >
+            <Pressable
+              onPress={() => setGenre(null)}
+              style={[styles.genrePill, browser.filters.genre === null && styles.genrePillActive]}
+            >
+              <Text style={[styles.genreLabel, browser.filters.genre === null && styles.genreLabelActive]}>
+                All genres
+              </Text>
+            </Pressable>
+            {genres.map((genre) => {
+              const active = browser.filters.genre === genre;
+              return (
+                <Pressable
+                  key={genre}
+                  onPress={() => setGenre(active ? null : genre)}
+                  style={[styles.genrePill, active && styles.genrePillActive]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.genreLabel, active && styles.genreLabelActive]}>{genre}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      <View style={[styles.typeRow, { paddingHorizontal: stage.gutter }]}>
+        {TYPES.map((entry) => {
+          const active = browser.filters.type === entry.key;
+          return (
+            <Pressable
+              key={entry.key}
+              onPress={() => browser.setType(entry.key)}
+              style={[styles.typeChip, active && styles.typeChipActive]}
+            >
+              <Text style={[styles.typeLabel, active && styles.pillLabelActive]}>{entry.label}</Text>
+            </Pressable>
+          );
+        })}
+        <Text style={styles.count}>
+          {browser.loading || browser.searching ? "Loading…" : `${browser.total} titles`}
+        </Text>
+        {browser.filtersActive ? (
+          <Pressable onPress={browser.reset} style={styles.reset} accessibilityRole="button">
+            <X size={12} color={palette.accent} />
+            <Text style={styles.resetLabel}>Reset</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+
+  if (browser.error && !browser.snapshot) {
+    return (
+      <View style={[styles.root, { paddingTop: insets.top }]}>
+        <AmbientGlow />
+        <ErrorState message={browser.error} onRetry={() => void browser.refresh()} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.root, { paddingTop: insets.top + spacing.xs }]}>
+      <AmbientGlow />
+
+      <FlatList
+        key={`explore-${columns}`}
+        data={browser.items}
+        numColumns={columns}
+        keyExtractor={(item) => item.subjectId}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={header}
+        contentContainerStyle={[styles.grid, { paddingHorizontal: stage.gutter }]}
+        columnWrapperStyle={{ gap: spacing.md, marginBottom: spacing.md }}
+        onEndReached={() => void browser.loadMore()}
+        onEndReachedThreshold={0.5}
+        renderItem={({ item }) => (
+          <PosterCard
+            item={item}
+            width={cardWidth}
+            onPress={() => navigation.navigate("Details", { detailPath: item.slug, subjectId: item.subjectId })}
+          />
+        )}
+        ListEmptyComponent={
+          browser.loading || browser.searching ? (
+            <SkeletonRail count={6} itemWidth={cardWidth} />
+          ) : empty ? (
+            <EmptyState
+              title={browser.searchMode ? "No titles found" : "Nothing here yet"}
+              message={
+                browser.searchMode
+                  ? `Nothing matched “${browser.query.trim()}” with these filters. Try clearing them.`
+                  : "This collection is empty right now. Another world is a tap away."
+              }
+            />
+          ) : null
+        }
+        ListFooterComponent={
+          browser.loadingMore ? (
+            <View style={{ paddingVertical: spacing.lg, alignItems: "center" }}>
+              <ActivityIndicator color={palette.accent} size="small" />
+            </View>
+          ) : null
+        }
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: palette.background,
-  },
-  header: {
-    paddingVertical: spacing.sm,
-  },
+  root: { flex: 1, backgroundColor: palette.background },
+  header: { paddingVertical: spacing.sm },
   searchBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -250,16 +246,9 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 6,
   },
-  searchInput: {
-    flex: 1,
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "500",
-  },
-  moodsContainer: {
-    paddingVertical: spacing.sm,
-  },
-  moodPill: {
+  searchInput: { flex: 1, color: "#FFFFFF", fontSize: 15, fontWeight: "500" },
+  chipsContainer: { paddingVertical: spacing.sm },
+  pill: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: radius.pill,
@@ -269,23 +258,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  moodPillInactive: {
-    backgroundColor: palette.glassFillStrong,
+  pillInactive: { backgroundColor: palette.glassFillStrong, borderColor: palette.glassStroke },
+  pillActive: { borderColor: palette.accentBright },
+  pillLabel: { color: palette.textSecondary, fontSize: 13, fontWeight: "600" },
+  pillLabelActive: { color: "#FFFFFF", fontWeight: "700" },
+  genreContainer: { paddingBottom: spacing.sm },
+  genrePill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.glassStroke,
   },
-  moodPillActive: {
-    borderColor: palette.accentBright,
+  genrePillActive: { backgroundColor: palette.accentBright, borderColor: palette.accentBright },
+  genreLabel: { color: palette.textMuted, fontSize: 12, fontWeight: "600" },
+  genreLabelActive: { color: "#1A0E0A", fontWeight: "700" },
+  typeRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingBottom: spacing.sm },
+  typeChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: palette.glassFillStrong,
   },
-  moodLabel: {
-    color: palette.textSecondary,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  moodLabelActive: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-  },
-  grid: {
-    paddingTop: spacing.sm,
-  },
+  typeChipActive: { backgroundColor: palette.accent },
+  typeLabel: { color: palette.textSecondary, fontSize: 11.5, fontWeight: "700" },
+  count: { color: palette.textMuted, fontSize: 11, marginLeft: "auto" },
+  reset: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4 },
+  resetLabel: { color: palette.accent, fontSize: 11.5, fontWeight: "700" },
+  grid: { paddingTop: spacing.sm, paddingBottom: 110 },
 });

@@ -4,15 +4,38 @@
  */
 
 export interface CatalogueItem {
+  /** Raw provider title, exactly as published (may contain `[Hindi]` tags). */
   name: string;
+  /** Title with metadata tags removed — this is what the UI shows. */
+  displayName?: string;
   posterUrl: string | null;
   slug: string;
   subjectId: string;
   badge: string | null;
   rating: string | null;
   year: string | null;
+  /** Comma-separated, canonicalised genres. */
   genre: string | null;
   mediaType: "movie" | "series";
+  /** Production country, when the endpoint returns it (search does). */
+  country?: string | null;
+  /** Original language, when known. */
+  language?: string | null;
+  /** Audio track label, when known. */
+  audio?: string | null;
+  /** Provider dub flag (true = dubbed release). */
+  dub?: boolean;
+  dubs?: string[];
+  subtitles?: string[];
+  description?: string | null;
+  duration?: number | null;
+  releaseDate?: string | null;
+  hasResource?: boolean;
+  baseTitle?: string | null;
+  /** Short-form television (provider type 7). */
+  isShort?: boolean;
+  /** `[Hindi]`, `[CAM]`… extracted from the raw title. */
+  tags?: string[];
 }
 
 export interface HomeSection {
@@ -89,30 +112,6 @@ export class ProviderError extends Error {
   }
 }
 
-export function parseCatalogueItem(raw: unknown): CatalogueItem | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  const name = isNonEmptyString(r.name) ? r.name : isNonEmptyString(r.title) ? r.title : null;
-  const slug = isNonEmptyString(r.slug) ? r.slug : isNonEmptyString(r.detail_path) ? r.detail_path : isNonEmptyString(r.detailPath) ? r.detailPath : null;
-  const subjectId = isNonEmptyString(r.subject_id) ? r.subject_id : isNonEmptyString(r.subjectId) ? r.subjectId : null;
-  if (!name || !slug || !subjectId) return null;
-  const cover = typeof r.cover === "object" && r.cover !== null ? (r.cover as Record<string, unknown>) : null;
-  const posterUrl = isNonEmptyString(r.poster_url) ? r.poster_url : isNonEmptyString(r.posterUrl) ? r.posterUrl : isNonEmptyString(cover?.url) ? cover!.url : null;
-  const type = r.type ?? r.subjectType;
-  const mediaType = type === "series" || type === "tv" || type === 2 ? "series" : "movie";
-  const year = r.year ?? (isNonEmptyString(r.releaseDate) ? r.releaseDate.slice(0, 4) : null);
-  return {
-    name,
-    posterUrl,
-    slug,
-    subjectId,
-    badge: isNonEmptyString(r.badge) ? r.badge : null,
-    rating: isNonEmptyString(r.rating) ? r.rating : isNonEmptyString(r.imdbRatingValue) ? r.imdbRatingValue : null,
-    year: typeof year === "string" ? year : typeof year === "number" ? String(year) : null,
-    genre: isNonEmptyString(r.genre) ? r.genre : null,
-    mediaType,
-  };
-}
 
 export function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;

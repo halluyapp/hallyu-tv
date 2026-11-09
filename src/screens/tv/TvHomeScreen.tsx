@@ -1,55 +1,36 @@
 import { StageRail, type RailEntry } from "@/components/stage/StageRail";
 import { HeroStage } from "@/components/tv/HeroStage";
 import { TvSpine, type SpineItem } from "@/components/tv/TvSpine";
-import { EmptyState, ErrorState } from "@/components/ui/States";
 import { AmbientGlow } from "@/components/ui/AmbientGlow";
+import { EmptyState, ErrorState } from "@/components/ui/States";
 import { stagger } from "@/design-system/motion";
 import type { Stage } from "@/design-system/stage";
 import { palette, radius } from "@/design-system/tokens";
+import { useCatalogue } from "@/hooks/useCatalogue";
 import { useStage } from "@/hooks/useStage";
 import { RootStackParamList } from "@/navigation/RootNavigator";
-import { hydrateHome, loadHome } from "@/services/provider/homeCatalogue";
 import { useLibrary, type LibraryTitle, type ProgressRow } from "@/state/LibraryContext";
-import { ProviderError, type HomeSection } from "@/types/provider";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { Download, Home as HomeIcon, MonitorSmartphone, Search } from "lucide-react-native";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Compass, Download, Home as HomeIcon, MonitorSmartphone, Search } from "lucide-react-native";
+import React, { useCallback, useMemo } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Open = (detailPath: string, subjectId: string) => void;
 
+/**
+ * The Stage — the 10-foot home.
+ *
+ * Renders exactly the shelves the shared catalogue service built, so the TV
+ * APK and the phone APK can never disagree about what is trending or what
+ * counts as a K-Drama.
+ */
 export function TvHomeScreen() {
   const stage = useStage();
   const navigation = useNavigation<Nav>();
   const { progress, watchlist } = useLibrary();
-
-  const [sections, setSections] = useState<HomeSection[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoadError(null);
-    try {
-      setSections(await loadHome());
-    } catch (err) {
-      setLoadError(err instanceof ProviderError ? err.message : "The catalogue could not be loaded.");
-    }
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    void hydrateHome().then((cached) => {
-      if (mounted && cached) setSections(cached);
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { snapshot, loading, error, refresh } = useCatalogue();
 
   const open = useCallback<Open>(
     (detailPath, subjectId) => navigation.navigate("Details", { detailPath, subjectId }),
@@ -71,6 +52,12 @@ export function TvHomeScreen() {
         onPress: () => {},
       },
       {
+        key: "explore",
+        label: "Explore",
+        icon: Compass,
+        onPress: () => navigation.navigate("TvExplore"),
+      },
+      {
         key: "downloads",
         label: "Downloads",
         icon: Download,
@@ -86,29 +73,22 @@ export function TvHomeScreen() {
     [navigation],
   );
 
-  const heroes = useMemo(() => {
-    const banner = (sections ?? []).find((s) => s.section === "Banner")?.items ?? [];
-    const everything = (sections ?? []).flatMap((s) => s.items);
-    const seen = new Set<string>();
-    return [...banner, ...everything]
-      .filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)))
-      .slice(0, 5);
-  }, [sections]);
-
-  const rails = useMemo(
-    () => (sections ?? []).filter((s) => s.items.length > 0 && s.section !== "Banner"),
-    [sections],
-  );
+  const heroes = snapshot?.hero ?? [];
+  // The wall carries the curated core; Explore carries every world.
+  const shelves = (snapshot?.shelves ?? []).slice(0, 18);
 
   const resume = useMemo(
-    () => progress.filter((r) => !r.completed && r.position_seconds > 5).slice(0, 20),
+    () => progress.filter((row) => !row.completed && row.position_seconds > 5).slice(0, 20),
     [progress],
   );
 
-  const resumeEntries = useMemo(() => resume.map((r) => toResumeEntry(r, open)), [resume, open]);
-  const watchlistEntries = useMemo(() => watchlist.map((item) => toLibraryEntry(item, open)), [watchlist, open]);
+  const resumeEntries = useMemo(() => resume.map((row) => toResumeEntry(row, open)), [resume, open]);
+  const watchlistEntries = useMemo(
+    () => watchlist.map((item) => toLibraryEntry(item, open)),
+    [watchlist, open],
+  );
 
-  const empty = sections !== null && heroes.length === 0 && rails.length === 0;
+  const empty = !loading && snapshot !== null && heroes.length === 0 && shelves.length === 0;
 
   return (
     <View style={styles.root}>
@@ -122,11 +102,9 @@ export function TvHomeScreen() {
           contentContainerStyle={{ paddingBottom: stage.gutter * 2 }}
           showsVerticalScrollIndicator={false}
         >
-          {loadError && sections === null ? (
-            <ErrorState message={loadError} onRetry={() => void load()} />
-          ) : null}
+          {error && !snapshot ? <ErrorState message={error} onRetry={() => void refresh()} /> : null}
 
-          {sections === null && !loadError ? <LoadingStage stage={stage} /> : null}
+          {!snapshot && loading ? <LoadingStage stage={stage} /> : null}
 
           {empty ? (
             <EmptyState
@@ -136,11 +114,7 @@ export function TvHomeScreen() {
           ) : null}
 
           {heroes.length > 0 ? (
-            <HeroStage
-              items={heroes}
-              stage={stage}
-              onOpen={(item) => open(item.slug, item.subjectId)}
-            />
+            <HeroStage items={heroes} stage={stage} onOpen={(item) => open(item.slug, item.subjectId)} />
           ) : null}
 
           {resumeEntries.length > 0 ? (
@@ -153,17 +127,18 @@ export function TvHomeScreen() {
             />
           ) : null}
 
-          {rails.map((section, index) => (
+          {shelves.map((shelf, index) => (
             <StageRail
-              key={section.section}
-              label={sectionLabel(section.section)}
+              key={shelf.key}
+              label={shelf.subtitle ? `${shelf.title} · ${shelf.subtitle}` : shelf.title}
               stage={stage}
               delay={60 + index * stagger}
               preferredFocus={resumeEntries.length === 0 && index === 0}
-              entries={section.items.map((item) => ({
-                key: `${section.section}_${item.subjectId}`,
+              onSeeAll={() => navigation.navigate("TvExplore")}
+              entries={shelf.items.map((item) => ({
+                key: `${shelf.key}_${item.subjectId}`,
                 posterUrl: item.posterUrl,
-                title: item.name,
+                title: item.displayName ?? item.name,
                 meta: [item.year, item.mediaType === "series" ? "Series" : "Movie"].filter(Boolean).join(" · "),
                 progress: null,
                 onPress: () => open(item.slug, item.subjectId),
@@ -176,7 +151,7 @@ export function TvHomeScreen() {
               label="Saved to Watchlist"
               entries={watchlistEntries}
               stage={stage}
-              delay={60 + rails.length * stagger}
+              delay={60 + shelves.length * stagger}
             />
           ) : null}
         </ScrollView>
@@ -205,7 +180,7 @@ function toResumeEntry(row: ProgressRow, open: Open): RailEntry {
 
 function toLibraryEntry(item: LibraryTitle, open: Open): RailEntry {
   return {
-    key: item.subject_id,
+    key: `lib_${item.subject_id}`,
     posterUrl: item.poster_url,
     title: item.title,
     meta: item.media_type === "series" ? "Series" : "Movie",
@@ -214,11 +189,6 @@ function toLibraryEntry(item: LibraryTitle, open: Open): RailEntry {
       if (item.detail_path) open(item.detail_path, item.subject_id);
     },
   };
-}
-
-function sectionLabel(raw: string): string {
-  const spaced = raw.replace(/[_-]+/g, " ").trim();
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 function LoadingStage({ stage }: { stage: Stage }) {

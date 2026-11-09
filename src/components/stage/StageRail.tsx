@@ -25,9 +25,18 @@ interface StageRailProps {
   stage: Stage;
   delay?: number;
   preferredFocus?: boolean;
+  /** Opens the full collection in Explore. */
+  onSeeAll?: () => void;
 }
 
-export function StageRail({ label, entries, stage, delay = 0, preferredFocus = false }: StageRailProps) {
+export function StageRail({
+  label,
+  entries,
+  stage,
+  delay = 0,
+  preferredFocus = false,
+  onSeeAll,
+}: StageRailProps) {
   const reduced = useReducedMotion();
   const [focused, setFocused] = useState<number | null>(null);
   const focusIndex = useRef(new Animated.Value(0)).current;
@@ -112,6 +121,16 @@ export function StageRail({ label, entries, stage, delay = 0, preferredFocus = f
             {entries.length}
           </Text>
         </View>
+        {onSeeAll ? (
+          <Pressable
+            onPress={onSeeAll}
+            style={{ marginLeft: "auto", paddingHorizontal: 6, paddingVertical: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel={`See all ${label}`}
+          >
+            <Text style={{ color: palette.accent, fontSize: stage.metaSize, fontWeight: "700" }}>See all</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView

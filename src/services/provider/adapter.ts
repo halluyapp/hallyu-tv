@@ -1,5 +1,6 @@
 import { providerFetch, PROVIDER_MEDIA_HEADERS } from "./client";
 import { normalizeStreamResponse, selectableSources, streamEndpoint } from "./streams";
+import { normalizeHomeSections, normalizeItems, type NormalizeReport } from "@/services/catalogue/normalize";
 import {
   CaptionTrack,
   CatalogueItem,
@@ -10,7 +11,6 @@ import {
   StreamResolution,
   TitleDetail,
   isNonEmptyString,
-  parseCatalogueItem,
 } from "@/types/provider";
 
 /** Typed adapter for the Zarhosting public API. Responses are validated at runtime. */
@@ -22,42 +22,87 @@ function unwrap(raw: unknown): Record<string, unknown> {
   return r;
 }
 
-export async function fetchHome(signal?: AbortSignal): Promise<HomeSection[]> {
+export interface HomeCatalogueResponse {
+  sections: HomeSection[];
+  report: NormalizeReport;
+  rawSections: number;
+  mergedSections: number;
+}
+
+/**
+ * GET /home, fully normalized. Grouping and de-duplication happen in
+ * `normalizeHomeSections`, so callers never see two rails with the same world
+ * label (the provider ships `🔥Trending Now` and `🔥Trending now` separately).
+ */
+export async function fetchHomeCatalogue(signal?: AbortSignal): Promise<HomeCatalogueResponse> {
   const raw = await providerFetch("/home", { signal });
   const data = unwrap(raw);
-  const rawSections = Array.isArray(data.sections) ? data.sections : Array.isArray((raw as Record<string, unknown>)?.sections) ? (raw as { sections: unknown[] }).sections : [];
-  const sections: HomeSection[] = [];
-  const seenLabels = new Set<string>();
-  for (const s of rawSections) {
-    if (typeof s !== "object" || s === null) continue;
-    const section = s as Record<string, unknown>;
-    const label = isNonEmptyString(section.section) ? section.section : isNonEmptyString(section.title) ? section.title : null;
-    if (!label || !Array.isArray(section.items) || seenLabels.has(label)) continue;
-    const items = section.items.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
-    const seen = new Set<string>();
-    const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
-    if (unique.length === 0) continue;
-    seenLabels.add(label);
-    sections.push({ section: label, items: unique });
-  }
-  return sections;
+  const rawSections = Array.isArray(data.sections)
+    ? data.sections
+    : Array.isArray((raw as Record<string, unknown>)?.sections)
+      ? (raw as { sections: unknown[] }).sections
+      : [];
+  const { sections, report, mergedSections } = normalizeHomeSections(rawSections);
+  return { sections, report, rawSections: rawSections.length, mergedSections };
+}
+
+export async function fetchHome(signal?: AbortSignal): Promise<HomeSection[]> {
+  return (await fetchHomeCatalogue(signal)).sections;
 }
 
 export interface SearchPage {
   items: CatalogueItem[];
   page: number;
   totalPages: number;
+  total: number;
+  count: number;
+  hasMore: boolean;
+  report: NormalizeReport;
 }
 
-export async function searchCatalogue(query: string, page = 1, signal?: AbortSignal): Promise<SearchPage> {
-  const raw = await providerFetch(`/search?q=${encodeURIComponent(query)}&page=${page}`, { signal });
+/**
+ * GET /search — the provider's title index. It accepts `q`, `page` and
+ * `per_page` only; genre/country/audio/sort parameters are ignored server-side.
+ */
+export async function searchCatalogue(
+  query: string,
+  page = 1,
+  signal?: AbortSignal,
+  perPage = 30,
+): Promise<SearchPage> {
+  const q = query.trim();
+  if (q.length === 0) {
+    return {
+      items: [],
+      page,
+      totalPages: 1,
+      total: 0,
+      count: 0,
+      hasMore: false,
+      report: normalizeItems([]).report,
+    };
+  }
+  const params = new URLSearchParams({ q, page: String(page), per_page: String(perPage) });
+  const raw = await providerFetch(`/search?${params.toString()}`, { signal });
   const data = unwrap(raw);
   const rawItems = Array.isArray(data.items) ? data.items : Array.isArray(data.results) ? data.results : [];
-  const items = rawItems.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
-  const seen = new Set<string>();
-  const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
-  const totalPages = typeof data.total_pages === "number" ? data.total_pages : typeof data.totalPages === "number" ? data.totalPages : 1;
-  return { items: unique, page, totalPages };
+  const { items, report } = normalizeItems(rawItems);
+  const totalPages =
+    typeof data.total_pages === "number"
+      ? data.total_pages
+      : typeof data.totalPages === "number"
+        ? data.totalPages
+        : 1;
+  const total = typeof data.total === "number" ? data.total : items.length;
+  return {
+    items,
+    page,
+    totalPages,
+    total,
+    count: items.length,
+    hasMore: typeof data.has_more === "boolean" ? data.has_more : page < totalPages,
+    report,
+  };
 }
 
 export async function fetchDetail(detailPath: string, signal?: AbortSignal): Promise<TitleDetail> {

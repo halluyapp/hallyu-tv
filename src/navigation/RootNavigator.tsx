@@ -6,6 +6,7 @@ import { DiscoverScreen } from "@/screens/discover/DiscoverScreen";
 import { MySpaceScreen } from "@/screens/mine/MySpaceScreen";
 import { PlayerScreen } from "@/screens/player/PlayerScreen";
 import { TvHomeScreen } from "@/screens/tv/TvHomeScreen";
+import { TvExploreScreen } from "@/screens/tv/TvExploreScreen";
 import { TvSearchScreen } from "@/screens/tv/TvSearchScreen";
 import { TvSettingsScreen } from "@/screens/tv/TvSettingsScreen";
 import { OnboardingScreen } from "@/screens/onboarding/OnboardingScreen";
@@ -20,6 +21,7 @@ import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Home, Compass, Download, User } from "lucide-react-native";
 import type { StreamSource } from "@/types/provider";
+import type { WorldKey } from "@/services/catalogue/worlds";
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -38,6 +40,7 @@ export type RootStackParamList = {
     nextEpisode?: { season: number; episode: number } | null;
   };
   TvHome: undefined;
+  TvExplore: undefined;
   TvSearch: undefined;
   TvDownloads: undefined;
   TvSettings: undefined;
@@ -45,7 +48,7 @@ export type RootStackParamList = {
 
 export type TabParamList = {
   Home: undefined;
-  Discover: undefined;
+  Discover: { world?: WorldKey; genre?: string | null } | undefined;
   Downloads: undefined;
   MySpace: undefined;
 };
@@ -128,6 +131,7 @@ export function RootNavigator({ showOnboarding }: { showOnboarding: boolean }) {
     return (
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
         <Stack.Screen name="TvHome" component={TvHomeScreen} />
+        <Stack.Screen name="TvExplore" component={TvExploreScreen} />
         <Stack.Screen name="TvSearch" component={TvSearchScreen} />
         <Stack.Screen name="TvDownloads" component={DownloadsScreen} />
         <Stack.Screen name="TvSettings" component={TvSettingsScreen} />
