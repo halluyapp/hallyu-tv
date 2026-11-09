@@ -53,7 +53,6 @@ export const AmbientArtworkCanvas = memo(function AmbientArtworkCanvas({
           style={styles.bleedImage}
           contentFit="cover"
           allowDownscaling
-          decodeFormat="rgb"
           priority="low"
           blurRadius={16}
           cachePolicy="memory-disk"

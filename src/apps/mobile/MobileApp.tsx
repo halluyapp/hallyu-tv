@@ -98,7 +98,6 @@ function MobileTabsNavigator({
       screenOptions={{
         headerShown: false,
         lazy: true,
-        freezeOnBlur: true,
       }}
     >
       <Tab.Screen name="Home" component={MobileHomeScreen} />
@@ -187,7 +186,6 @@ export function MobileApp() {
                       initialRouteName={showOnboarding ? "Onboarding" : "MobileTabs"}
                       screenOptions={{
                         headerShown: false,
-                        freezeOnBlur: true,
                         animation: "slide_from_right",
                         contentStyle: { backgroundColor: palette.background },
                       }}

@@ -31,6 +31,15 @@ export interface StarInfo {
   avatarUrl: string | null;
 }
 
+export interface AudioVersionOption {
+  subjectId: string;
+  detailPath: string;
+  label: string;
+  lanCode: string | null;
+  isOriginal: boolean;
+  isHindi: boolean;
+}
+
 export interface TitleDetail {
   subjectId: string;
   title: string;
@@ -47,6 +56,7 @@ export interface TitleDetail {
   seasons: SeasonInfo[];
   subtitlesAvailable: string[];
   cast: StarInfo[];
+  audioVersions?: AudioVersionOption[];
 }
 
 /**

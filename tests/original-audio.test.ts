@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
-import { fetchDetail, fetchHome, resolveOriginalStreams, searchCatalogue } from "@/services/provider/adapter";
+import {
+  fetchAudioVersions,
+  fetchDetail,
+  fetchHome,
+  resolveOriginalStreams,
+  searchCatalogue,
+} from "@/services/provider/adapter";
 import {
   cleanBaseTitle,
   filterOriginalCatalogueItems,
@@ -329,5 +336,159 @@ describe("Original Audio Enforcement (No Unwanted Hindi Dubs)", () => {
     expect(pickOriginalAudioTrack(triAudioKdrama, "South Korea")?.id).toBe("2");
     expect(formatAudioTrackLabel(triAudioKdrama[2]!, 2, "South Korea")).toContain("Original");
     expect(formatAudioTrackLabel(triAudioKdrama[0]!, 0, "South Korea")).toContain("Dub");
+  });
+
+  test("fetchHome NEVER drops sections when Moviebox puts language availability badges on cards", async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          sections: [
+            {
+              section: "Banner",
+              items: [
+                {
+                  subjectId: "kd1",
+                  name: "Queen of Tears",
+                  slug: "queen-of-tears-abc111",
+                  badge: "Hindi",
+                  type: "series",
+                },
+                {
+                  subjectId: "kd2",
+                  name: "Lovely Runner",
+                  slug: "lovely-runner-abc222",
+                  badge: "Indonesian",
+                  type: "series",
+                },
+              ],
+            },
+            {
+              section: "Trending K-Drama",
+              items: [
+                {
+                  subjectId: "kd3",
+                  name: "Marry My Husband",
+                  slug: "marry-my-husband-abc333",
+                  badge: "Sub | Dub",
+                  type: "series",
+                },
+                {
+                  subjectId: "kd4",
+                  name: "Moving",
+                  slug: "moving-abc444",
+                  badge: "Arabic",
+                  type: "series",
+                },
+              ],
+            },
+            {
+              section: "Popular Series",
+              items: [
+                // Even if an entire rail only had -hindi- slugs, fetchHome never drops the rail!
+                {
+                  subjectId: "aot-hi",
+                  name: "Attack on Titan [Hindi]",
+                  slug: "attack-on-titan-hindi-kGWQOIx0d4",
+                  badge: "Hindi",
+                  type: "series",
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+
+    try {
+      const home = await fetchHome();
+      expect(home.map((s) => s.section)).toEqual(["Banner", "Trending K-Drama", "Popular Series"]);
+      expect(home[0]?.items.map((i) => i.subjectId)).toEqual(["kd1", "kd2"]);
+      expect(home[1]?.items.map((i) => i.subjectId)).toEqual(["kd3", "kd4"]);
+      expect(home[2]?.items.length).toBe(1);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test("fetchAudioVersions discovers Original Audio + Dub siblings from /detail and /search for live player switching", async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/detail/squid-game-hindi-999")) {
+        return new Response(
+          JSON.stringify({
+            subject: {
+              subjectId: "sg-hi",
+              title: "Squid Game [Hindi]",
+              detailPath: "squid-game-hindi-999",
+              countryName: "South Korea",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/search?q=Squid%20Game")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                subjectId: "sg-hi",
+                name: "Squid Game [Hindi]",
+                slug: "squid-game-hindi-999",
+                type: "series",
+              },
+              {
+                subjectId: "sg-orig",
+                name: "Squid Game",
+                slug: "squid-game-orig-111",
+                type: "series",
+              },
+              {
+                subjectId: "sg-en",
+                name: "Squid Game [English]",
+                slug: "squid-game-english-222",
+                type: "series",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    try {
+      const versions = await fetchAudioVersions({
+        subjectId: "sg-hi",
+        detailPath: "squid-game-hindi-999",
+        title: "Squid Game [Hindi]",
+        mediaType: "series",
+      });
+      expect(versions[0]?.subjectId).toBe("sg-orig");
+      expect(versions[0]?.isOriginal).toBe(true);
+      expect(versions[0]?.label).toBe("Original Audio (Korean)");
+      expect(versions.some((v) => v.subjectId === "sg-en" && v.label.includes("English"))).toBe(true);
+      expect(versions.some((v) => v.subjectId === "sg-hi" && v.isHindi)).toBe(true);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test("crash-safety invariants: no availableAudioTracksChange JSI race, no enableFreeze, no RGB_565 blur", () => {
+    const engineSrc = readFileSync("src/services/player/usePlaybackEngine.ts", "utf8");
+    expect(engineSrc).not.toContain('useEvent(player, "availableAudioTracksChange"');
+
+    const indexSrc = readFileSync("index.ts", "utf8");
+    const mobileEntry = readFileSync("entries/mobile.ts", "utf8");
+    const tvEntry = readFileSync("entries/tv.ts", "utf8");
+    expect(indexSrc).not.toContain("enableFreeze");
+    expect(mobileEntry).not.toContain("enableFreeze");
+    expect(tvEntry).not.toContain("enableFreeze");
+
+    const posterSrc = readFileSync("src/components/ui/Poster.tsx", "utf8");
+    const ambientSrc = readFileSync("src/ui/glass/AmbientArtworkCanvas.tsx", "utf8");
+    expect(posterSrc).not.toContain('decodeFormat="rgb"');
+    expect(ambientSrc).not.toContain('decodeFormat="rgb"');
   });
 });

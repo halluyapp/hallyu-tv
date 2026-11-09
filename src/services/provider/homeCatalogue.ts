@@ -13,7 +13,7 @@ import { fetchHome } from "./adapter";
  *   before React Navigation even finishes mounting!
  */
 
-const KEY = "hallyu.cache.home.v2";
+const KEY = "hallyu.cache.home.v3";
 const FRESH_TTL_MS = 3 * 60 * 1000;
 
 let bootPromise: Promise<HomeSection[]> | null = null;

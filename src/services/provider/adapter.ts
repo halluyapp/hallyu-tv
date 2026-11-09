@@ -1,6 +1,8 @@
 import { providerFetch, PROVIDER_MEDIA_HEADERS } from "./client";
 import {
+  buildAudioVersionOptions,
   cleanBaseTitle,
+  type DubSibling,
   filterOriginalCatalogueItems,
   isDubbedMetadata,
   normalizeTitleKey,
@@ -9,6 +11,7 @@ import {
 } from "./originalAudio";
 import { normalizeStreamResponse, selectableSources, streamEndpoint } from "./streams";
 import {
+  type AudioVersionOption,
   CaptionTrack,
   CatalogueItem,
   HomeSection,
@@ -49,16 +52,16 @@ export async function fetchHome(signal?: AbortSignal): Promise<HomeSection[]> {
         ? section.title
         : null;
     if (!label || !Array.isArray(section.items) || seenLabels.has(label)) continue;
-    // Skip entire Hindi/regional dub-only rails if Moviebox ever injects one
-    if (/\bhindi\s+dub|\bdubbed\s+in\s+hindi/i.test(label)) continue;
 
     const items = section.items.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
     const seen = new Set<string>();
     const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
-    const originalsOnly = filterOriginalCatalogueItems(unique);
-    if (originalsOnly.length === 0) continue;
+    if (unique.length === 0) continue;
+
+    // Gently hide explicit [Hindi] / -hindi- duplicate cards while NEVER emptying any Home section!
+    const cleaned = filterOriginalCatalogueItems(unique);
     seenLabels.add(label);
-    sections.push({ section: label, items: originalsOnly });
+    sections.push({ section: label, items: cleaned.length > 0 ? cleaned : unique });
   }
   return sections;
 }
@@ -69,27 +72,34 @@ export interface SearchPage {
   totalPages: number;
 }
 
-export async function searchCatalogue(query: string, page = 1, signal?: AbortSignal): Promise<SearchPage> {
+async function searchRawCatalogue(query: string, page = 1, signal?: AbortSignal): Promise<SearchPage> {
   const raw = await providerFetch(`/search?q=${encodeURIComponent(query)}&page=${page}`, { signal });
   const data = unwrap(raw);
   const rawItems = Array.isArray(data.items) ? data.items : Array.isArray(data.results) ? data.results : [];
   const items = rawItems.map(parseCatalogueItem).filter((i): i is CatalogueItem => i !== null);
   const seen = new Set<string>();
   const unique = items.filter((i) => (seen.has(i.subjectId) ? false : (seen.add(i.subjectId), true)));
-  const filtered = filterOriginalCatalogueItems(unique, { query });
   const totalPages =
     typeof data.total_pages === "number"
       ? data.total_pages
       : typeof data.totalPages === "number"
         ? data.totalPages
         : 1;
-  return { items: filtered, page, totalPages };
+  return { items: unique, page, totalPages };
+}
+
+export async function searchCatalogue(query: string, page = 1, signal?: AbortSignal): Promise<SearchPage> {
+  const rawPage = await searchRawCatalogue(query, page, signal);
+  const filtered = filterOriginalCatalogueItems(rawPage.items, { query });
+  return { items: filtered, page: rawPage.page, totalPages: rawPage.totalPages };
 }
 
 async function fetchDetailInternal(
   detailPath: string,
   signal?: AbortSignal,
   allowOriginalRedirect = true,
+  inheritedDubs: readonly DubSibling[] = [],
+  inheritedSearchSiblings: readonly CatalogueItem[] = [],
 ): Promise<TitleDetail> {
   const raw = await providerFetch(`/detail/${encodeURIComponent(detailPath)}`, { signal });
   const data = unwrap(raw);
@@ -106,22 +116,37 @@ async function fetchDetailInternal(
   const resolvedSlug = isNonEmptyString(subject.detailPath) ? subject.detailPath : detailPath;
   const country = isNonEmptyString(subject.countryName) ? subject.countryName : null;
 
+  const localDubs = parseDubSiblings(subject, data, resource);
+  const mergedDubs =
+    inheritedDubs.length > 0
+      ? [
+          ...localDubs,
+          ...inheritedDubs.filter((d) => !localDubs.some((ld) => ld.subjectId === d.subjectId)),
+        ]
+      : localDubs;
+  let searchSiblings: readonly CatalogueItem[] = inheritedSearchSiblings;
+
   // Canonicalize Hindi / regional dubbed subjects to their Original Audio release!
   if (allowOriginalRedirect) {
-    const dubs = parseDubSiblings(subject, data, resource);
     const originalSibling = pickOriginalDubSibling({
       currentSubjectId: subject.subjectId,
       currentTitle: subject.title,
       currentSlug: resolvedSlug,
       country,
-      dubs,
+      dubs: mergedDubs,
     });
 
     if (originalSibling && originalSibling.detailPath !== resolvedSlug) {
       try {
-        return await fetchDetailInternal(originalSibling.detailPath, signal, false);
+        return await fetchDetailInternal(
+          originalSibling.detailPath,
+          signal,
+          false,
+          mergedDubs,
+          searchSiblings,
+        );
       } catch {
-        // If sibling lookup fails, continue to clean-title fallback or current detail
+        // Continue to clean-title fallback or current detail
       }
     }
 
@@ -144,23 +169,34 @@ async function fetchDetailInternal(
 
       if (baseTitle.length >= 2 && wantedKey.length >= 2) {
         try {
-          const searchRes = await searchCatalogue(baseTitle, 1, signal);
-          const cleanMatch =
-            searchRes.items.find(
-              (item) =>
-                item.subjectId !== subject.subjectId &&
-                item.mediaType === wantedMediaType &&
-                normalizeTitleKey(item.name) === wantedKey &&
-                (!wantedYear || !item.year || item.year === wantedYear),
-            ) ??
-            searchRes.items.find(
-              (item) =>
-                item.subjectId !== subject.subjectId &&
-                item.mediaType === wantedMediaType &&
-                normalizeTitleKey(item.name) === wantedKey,
-            );
+          const searchRes = await searchRawCatalogue(baseTitle, 1, signal);
+          const matchingSiblings = searchRes.items.filter(
+            (item) =>
+              item.mediaType === wantedMediaType &&
+              normalizeTitleKey(item.name) === wantedKey &&
+              (!wantedYear || !item.year || item.year === wantedYear),
+          );
+          searchSiblings =
+            matchingSiblings.length > 0
+              ? matchingSiblings
+              : searchRes.items.filter(
+                  (item) =>
+                    item.mediaType === wantedMediaType && normalizeTitleKey(item.name) === wantedKey,
+                );
+
+          const cleanMatch = searchSiblings.find(
+            (item) =>
+              item.subjectId !== subject.subjectId &&
+              !isDubbedMetadata({ title: item.name, slug: item.slug, country }),
+          );
           if (cleanMatch) {
-            return await fetchDetailInternal(cleanMatch.slug, signal, false);
+            return await fetchDetailInternal(
+              cleanMatch.slug,
+              signal,
+              false,
+              mergedDubs,
+              searchSiblings,
+            );
           }
         } catch {
           // Non-fatal fallback
@@ -200,6 +236,15 @@ async function fetchDetailInternal(
   const mediaType = seasons.length > 0 || subject.subjectType === 2 ? "series" : "movie";
   const trailerUrl = subject.trailer?.videoAddress?.url;
 
+  const audioVersions = buildAudioVersionOptions({
+    currentSubjectId: subject.subjectId,
+    currentDetailPath: resolvedSlug,
+    currentTitle: subject.title,
+    country,
+    dubs: mergedDubs,
+    searchSiblings,
+  });
+
   return {
     subjectId: subject.subjectId,
     title: cleanBaseTitle(subject.title) || subject.title,
@@ -221,6 +266,7 @@ async function fetchDetailInternal(
           .filter(Boolean)
       : [],
     cast,
+    audioVersions,
   };
 }
 
@@ -229,11 +275,82 @@ export async function fetchDetail(detailPath: string, signal?: AbortSignal): Pro
 }
 
 /**
+ * Discovers all available Language / Audio Versions (`Original Audio`, `English`,
+ * `Korean`, `Japanese`, `Hindi Dub`, etc.) for a title by combining `/detail` `dubs`
+ * with clean-title sibling lookup on `/search`. Powers the live in-player Audio Switcher!
+ */
+export async function fetchAudioVersions(
+  params: {
+    subjectId: string;
+    detailPath: string;
+    title: string;
+    mediaType: "movie" | "series";
+    country?: string | null;
+    existingVersions?: readonly AudioVersionOption[];
+  },
+  signal?: AbortSignal,
+): Promise<AudioVersionOption[]> {
+  const { subjectId, detailPath, title, mediaType } = params;
+  let country = params.country ?? null;
+  let dubs: DubSibling[] = [];
+
+  try {
+    const raw = await providerFetch(`/detail/${encodeURIComponent(detailPath)}`, { signal });
+    const data = unwrap(raw);
+    const subject = (
+      typeof data.subject === "object" && data.subject !== null ? data.subject : data
+    ) as Record<string, any>;
+    const resource = (
+      typeof data.resource === "object" && data.resource !== null ? data.resource : {}
+    ) as Record<string, any>;
+    if (!country && isNonEmptyString(subject?.countryName)) {
+      country = subject.countryName;
+    }
+    dubs = parseDubSiblings(subject, data, resource);
+  } catch {
+    // Non-fatal: continue with clean-title sibling lookup
+  }
+
+  let searchSiblings: CatalogueItem[] = [];
+  const baseTitle = cleanBaseTitle(title);
+  const wantedKey = normalizeTitleKey(baseTitle);
+  if (baseTitle.length >= 2 && wantedKey.length >= 2) {
+    try {
+      const searchRes = await searchRawCatalogue(baseTitle, 1, signal);
+      searchSiblings = searchRes.items.filter(
+        (item) => item.mediaType === mediaType && normalizeTitleKey(item.name) === wantedKey,
+      );
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  const built = buildAudioVersionOptions({
+    currentSubjectId: subjectId,
+    currentDetailPath: detailPath,
+    currentTitle: title,
+    country,
+    dubs,
+    searchSiblings,
+  });
+
+  if (params.existingVersions && params.existingVersions.length > 0) {
+    const merged = [...built];
+    for (const prev of params.existingVersions) {
+      if (!merged.some((m) => m.subjectId === prev.subjectId)) {
+        merged.push(prev);
+      }
+    }
+    return merged;
+  }
+
+  return built;
+}
+
+/**
  * Resolve playable sources through the required Zarhosting endpoint:
  * GET /stream/{subject_id}?detail_path=&se=&ep=
  * Movies use se=0&ep=0; series pass the selected season/episode.
- * If `detailPath` is a dubbed slug (e.g. from older local history), automatically
- * resolves the Original Audio sibling before requesting streams!
  */
 export async function resolveStreams(
   subjectId: string,
@@ -275,9 +392,9 @@ export async function resolveStreams(
 
 /**
  * Original-Audio-enforced stream resolver used by Player, Prefetcher & Downloader:
- * if `detailPath` is a Hindi/regional dub slug (e.g. `attack-on-titan-hindi-...`
- * from older local history or 0ms instant launch), automatically canonicalizes
- * to the Original Audio `subjectId` + `detailPath` before requesting `/stream`!
+ * if `detailPath` is a Hindi/regional dub slug (e.g. `attack-on-titan-hindi-...`),
+ * automatically canonicalizes to the Original Audio `subjectId` + `detailPath`
+ * before requesting `/stream`!
  */
 export async function resolveOriginalStreams(
   subjectId: string,
@@ -319,36 +436,35 @@ export async function fetchCaptions(
     const url = typeof r.url === "string" ? r.url : typeof r.subtitleUrl === "string" ? r.subtitleUrl : null;
     if (!url || !/^https:\/\//i.test(url) || seen.has(url)) continue;
     seen.add(url);
-    const language = isNonEmptyString(r.lan) ? r.lan : isNonEmptyString(r.language) ? r.language : "unknown";
-    const languageName = isNonEmptyString(r.lanName)
-      ? r.lanName
-      : isNonEmptyString(r.languageName)
-        ? r.languageName
-        : language;
-    tracks.push({
-      id: isNonEmptyString(r.id) ? r.id : `${language}-${tracks.length}`,
-      language,
-      languageName,
-      url,
-    });
+    const language = typeof r.lan === "string" ? r.lan : typeof r.language === "string" ? r.language : "und";
+    const languageName =
+      typeof r.lanName === "string"
+        ? r.lanName
+        : typeof r.language_name === "string"
+          ? r.language_name
+          : language.toUpperCase();
+    const id = typeof r.id === "string" || typeof r.id === "number" ? String(r.id) : `${language}_${tracks.length}`;
+    tracks.push({ id, language, languageName, url });
   }
   return tracks;
 }
 
-/** Fetch a caption file directly from the CDN with the media header profile. */
 export async function fetchCaptionText(url: string, signal?: AbortSignal): Promise<string> {
   if (!/^https:\/\//i.test(url)) throw new ProviderError("invalid_response", "Invalid caption URL.");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const timeout = setTimeout(() => controller.abort(), 12_000);
   const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort);
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    const res = await fetch(url, { headers: { ...PROVIDER_MEDIA_HEADERS }, signal: controller.signal });
-    if (!res.ok) throw new ProviderError("unavailable", `Caption server responded with ${res.status}`);
+    const res = await fetch(url, {
+      headers: PROVIDER_MEDIA_HEADERS,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new ProviderError("unavailable", "Caption track unavailable.");
     return await res.text();
   } catch (err) {
     if (err instanceof ProviderError) throw err;
-    throw new ProviderError("network", "Caption track could not be loaded.");
+    throw new ProviderError("network", "Could not download subtitles.");
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);

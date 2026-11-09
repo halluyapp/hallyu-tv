@@ -9,7 +9,7 @@ import { fetchDetail } from "./adapter";
  */
 
 const DETAIL_TTL_MS = 20 * 60 * 1000;
-const KEY_PREFIX = "hallyu.detail.v2.";
+const KEY_PREFIX = "hallyu.detail.v3.";
 const inflightDetails = new Map<string, Promise<TitleDetail>>();
 let focusPrefetchTimer: ReturnType<typeof setTimeout> | null = null;
 

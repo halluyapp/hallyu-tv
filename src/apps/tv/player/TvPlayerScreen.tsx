@@ -300,10 +300,10 @@ export function TvPlayerScreen() {
       ) : null}
 
       {/* Subtle Translucent Liquid Glass Remote Feedback Toast */}
-      {toast ? (
+      {toast || engine.audioSwitchToast ? (
         <View pointerEvents="none" style={styles.toastAnchor}>
           <LiquidGlassView variant="dock" borderRadius={radius.pill} contentStyle={styles.toastInner}>
-            <Text style={styles.toastText}>{toast}</Text>
+            <Text style={styles.toastText}>{engine.audioSwitchToast ?? toast}</Text>
           </LiquidGlassView>
         </View>
       ) : null}
@@ -506,7 +506,7 @@ export function TvPlayerScreen() {
                   }}
                 />
               ) : null}
-              {engine.nativeAudioTracks.length > 1 ? (
+              {!params.isTrailer && (!engine.offline || engine.nativeAudioTracks.length > 1) ? (
                 <GlassPillButton
                   label="Audio"
                   variant="secondary"
@@ -514,6 +514,7 @@ export function TvPlayerScreen() {
                   onFocus={revealDock}
                   onPress={() => {
                     engine.refreshNativeTracks();
+                    void engine.loadAudioVersions();
                     setActiveSheet("audio");
                   }}
                 />
@@ -649,18 +650,61 @@ export function TvPlayerScreen() {
 
         {activeSheet === "audio" ? (
           <ScrollView contentContainerStyle={styles.sheetStack}>
-            {engine.nativeAudioTracks.map((track, idx) => (
-              <GlassPillButton
-                key={track.id}
-                label={formatAudioTrackLabel(track, idx, engine.country)}
-                variant={engine.nativeAudioId === track.id ? "primary" : "secondary"}
-                hasTVPreferredFocus={engine.nativeAudioId === track.id || idx === 0}
-                onPress={() => {
-                  engine.pickNativeAudio(track);
-                  setActiveSheet(null);
-                }}
-              />
-            ))}
+            {!engine.offline ? (
+              <>
+                <Text style={styles.sheetRowTitle}>Stream Audio Version</Text>
+                {engine.audioVersionsLoading && engine.audioVersions.length <= 1 ? (
+                  <View style={{ paddingVertical: 10, alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator color={palette.accent} />
+                    <Text style={styles.sheetRowTitle}>Finding Original Audio & language versions…</Text>
+                  </View>
+                ) : null}
+                {engine.audioVersions.map((ver, idx) => {
+                  const active = ver.subjectId === engine.activeSubjectId;
+                  return (
+                    <GlassPillButton
+                      key={ver.subjectId}
+                      label={ver.label}
+                      variant={active ? "primary" : ver.isOriginal ? "pearl" : "secondary"}
+                      active={active}
+                      hasTVPreferredFocus={active || idx === 0}
+                      onPress={() => {
+                        setActiveSheet(null);
+                        void engine.switchAudioVersion(ver);
+                      }}
+                    />
+                  );
+                })}
+              </>
+            ) : null}
+
+            {engine.nativeAudioTracks.length > 1 ? (
+              <>
+                <Text style={[styles.sheetRowTitle, { marginTop: 8 }]}>Container Audio Tracks</Text>
+                {engine.nativeAudioTracks.map((track, idx) => (
+                  <GlassPillButton
+                    key={track.id}
+                    label={formatAudioTrackLabel(track, idx, engine.country)}
+                    variant={engine.nativeAudioId === track.id ? "primary" : "secondary"}
+                    hasTVPreferredFocus={
+                      engine.audioVersions.length === 0 && (engine.nativeAudioId === track.id || idx === 0)
+                    }
+                    onPress={() => {
+                      engine.pickNativeAudio(track);
+                      setActiveSheet(null);
+                    }}
+                  />
+                ))}
+              </>
+            ) : null}
+
+            {!engine.audioVersionsLoading &&
+            engine.audioVersions.length <= 1 &&
+            engine.nativeAudioTracks.length <= 1 ? (
+              <Text style={styles.sheetRowTitle}>
+                Playing the primary Original Audio stream available from the provider.
+              </Text>
+            ) : null}
           </ScrollView>
         ) : null}
 

@@ -1,14 +1,19 @@
+import type { AudioVersionOption } from "@/types/provider";
+
 /**
- * Original Audio Enforcement Engine for Moviebox / Zarhosting.
+ * Original Audio Enforcement & Live Audio Switcher Engine for Moviebox / Zarhosting.
  *
- * Moviebox (`moviebox.ph`) publishes Hindi and regional dubs at 4 levels:
- * 1. Separate `[Hindi]` / `-hindi-` catalogue items in `/home` and `/search`
- * 2. Sibling `dubs` entries inside `/detail/{detail_path}`
- * 3. Multi-language stream entries inside `/stream/{subject_id}`
- * 4. Dual-audio MP4/HLS containers where Track 0 is `hi` (Hindi) and Track 1 is Original
- *
- * Pure TypeScript so adapter, stream selector, player, and Bun unit tests share
- * identical rules.
+ * Key Moviebox (`moviebox.ph`) rules:
+ * 1. NEVER filter `/home` or `/search` items by `item.badge` — Moviebox puts
+ *    multi-language availability badges (e.g. "Hindi", "Indonesian", "Sub | Dub")
+ *    on top trending Original shows! Filtering by `badge` wipes out Home rails.
+ * 2. Only hide explicit `[Hindi]` / `(Hindi)` / `-hindi-` duplicate clone cards
+ *    on browse/search when clean items remain (never emptying any Home section).
+ * 3. Moviebox delivers audio languages in TWO ways:
+ *    - Separate sibling `subjectId` + `detailPath` entries (in `dubs` or `/search`)
+ *    - Multi-audio MP4/HLS containers (`player.availableAudioTracks`)
+ *    This module powers automatic Original Audio selection AND live in-player
+ *    switching across both!
  */
 
 export interface DubSibling {
@@ -26,27 +31,27 @@ export interface MinimalAudioTrack {
   label?: string | null;
 }
 
-const BRACKETED_DUB_RE =
-  /[\[(\{]\s*(?:in\s+)?(?:hindi|hin|tamil|tam|telugu|tel|malayalam|mal|kannada|kan|bengali|ben|marathi|punjabi|urdu|urd|tagalog|tgl|filipino|indonesian|indo|bahasa|malay|thai|vietnamese|viet|arabic|ara|russian|rus|french|fra|spanish|latino|portuguese|dublado|persian|farsi|turkish|khmer|burmese|sinhala)(?:\s*[-–/&,+\s]*\s*(?:dub|dubbed|audio|version|ver\.?|voice|eng|english|sub|hd))*\s*[\])\}]/gi;
+const BRACKETED_LANG_RE =
+  /[\[(\{]\s*(?:in\s+)?(hindi|hin|tamil|tam|telugu|tel|malayalam|mal|kannada|kan|bengali|ben|marathi|punjabi|urdu|urd|tagalog|tgl|filipino|indonesian|indo|bahasa|malay|thai|vietnamese|viet|arabic|ara|russian|rus|french|fra|spanish|latino|portuguese|dublado|persian|farsi|turkish|english|eng|korean|kor|japanese|jpn|chinese|mandarin)(?:\s*[-–/&,+\s]*\s*(?:dub|dubbed|audio|version|ver\.?|voice|sub|hd))*\s*[\])\}]/i;
+
+const BRACKETED_LANG_STRIP_RE =
+  /[\[(\{]\s*(?:in\s+)?(?:hindi|hin|tamil|tam|telugu|tel|malayalam|mal|kannada|kan|bengali|ben|marathi|punjabi|urdu|urd|tagalog|tgl|filipino|indonesian|indo|bahasa|malay|thai|vietnamese|viet|arabic|ara|russian|rus|french|fra|spanish|latino|portuguese|dublado|persian|farsi|turkish|english|eng|korean|kor|japanese|jpn|chinese|mandarin)(?:\s*[-–/&,+\s]*\s*(?:dub|dubbed|audio|version|ver\.?|voice|eng|english|sub|hd))*\s*[\])\}]/gi;
 
 const SUFFIX_DUB_RE =
-  /(?:[-–—:|]\s*|\b(?:in)\s+)(?:hindi|tamil|telugu|malayalam|kannada|bengali|marathi|punjabi|urdu|tagalog|filipino)(?:\s+(?:dub|dubbed|audio|version|movie|series))?\s*$/i;
+  /(?:[-–—:|]\s*|\b(?:in)\s+)(hindi|tamil|telugu|malayalam|kannada|bengali|marathi|punjabi|urdu|tagalog|filipino)(?:\s+(?:dub|dubbed|audio|version|movie|series))?\s*$/i;
 
 const EXPLICIT_PHRASE_DUB_RE =
-  /\b(?:hindi|tamil|telugu|malayalam|kannada|bengali|marathi|punjabi|urdu|tagalog|filipino|arabic|russian|french|indonesian|thai|vietnamese|spanish|portuguese|persian|turkish)\s+(?:dub|dubbed|voice[\s-]*over|audio\s*track|audio)\b/i;
+  /\b(hindi|tamil|telugu|malayalam|kannada|bengali|marathi|punjabi|urdu|tagalog|filipino|arabic|russian|french|indonesian|spanish|portuguese|persian|turkish)\s+(?:dub|dubbed|voice[\s-]*over|audio\s*track)\b/i;
 
 const DUAL_HINDI_RE = /\b(?:dual\s*audio[^\n]*hindi|hindi\s+dual\s*audio|hin[-/\s]+eng\s+dub(?:bed)?)\b/i;
 
 const HINDI_TOKEN_RE =
   /(?:^|[^a-z0-9])(?:hindi|हिंदी|हिन्दी)(?:$|[^a-z0-9])|(?:^|[\s\[(\-_.:/])hin(?:$|[\s\])\-_.:/])/i;
 
-const SLUG_DUB_TOKEN_RE =
-  /-(hindi|tamil|telugu|malayalam|kannada|bengali|urdu|tagalog|filipino)(?:-(?:dub|dubbed|audio|version|movie))?(?:-[a-z0-9]{5,16})?$/i;
+const SLUG_LANG_TOKEN_RE =
+  /-(hindi|tamil|telugu|malayalam|kannada|bengali|urdu|tagalog|filipino|indonesian|arabic|russian|french|spanish|portuguese|thai|turkish|english)(?:-(?:dub|dubbed|audio|version|movie))?(?:-[a-z0-9]{5,16})?$/i;
 
-const SLUG_EXPLICIT_DUB_RE =
-  /-(?:in-hindi|hindi-dub|hindi-dubbed|tamil-dub|tamil-dubbed|telugu-dub|telugu-dubbed|urdu-dub|urdu-dubbed|tagalog-dub|tagalog-dubbed|arabic-dub|russian-dub|french-dub|indonesian-dub)(?:-|$)/i;
-
-const QUERY_DUB_REQUEST_RE =
+const QUERY_HINDI_OR_DUB_REQUEST_RE =
   /\b(?:hindi|tamil|telugu|malayalam|kannada|bengali|urdu|tagalog|filipino|dub|dubbed|dual\s*audio)\b/i;
 
 const DUB_LANG_CODES = new Set([
@@ -79,47 +84,62 @@ const DUB_LANG_CODES = new Set([
   "punjabi",
 ]);
 
-const COUNTRY_LANGUAGE_MAP: ReadonlyArray<{ pattern: RegExp; codes: readonly string[] }> = [
-  { pattern: /\b(?:south\s+korea|korea|kr|rok)\b/i, codes: ["ko", "kor", "korean", "한국어"] },
-  { pattern: /\b(?:japan|jp|jpn)\b/i, codes: ["ja", "jpn", "japanese", "日本語"] },
+const COUNTRY_LANGUAGE_MAP: ReadonlyArray<{ pattern: RegExp; codes: readonly string[]; display: string }> = [
+  { pattern: /\b(?:south\s+korea|korea|kr|rok)\b/i, codes: ["ko", "kor", "korean", "한국어"], display: "Korean" },
+  { pattern: /\b(?:japan|jp|jpn)\b/i, codes: ["ja", "jpn", "japanese", "日本語"], display: "Japanese" },
   {
     pattern: /\b(?:china|mainland\s+china|hong\s+kong|taiwan|cn|hk|tw)\b/i,
     codes: ["zh", "zho", "chi", "cmn", "yue", "chinese", "mandarin", "cantonese", "中文", "国语", "粤语"],
+    display: "Chinese",
   },
-  { pattern: /\b(?:thailand|th|tha)\b/i, codes: ["th", "tha", "thai"] },
+  { pattern: /\b(?:thailand|th|tha)\b/i, codes: ["th", "tha", "thai"], display: "Thai" },
   {
-    pattern: /\b(?:united\s+states|usa|u\.s\.a\.?|us|united\s+kingdom|uk|britain|england|canada|australia|new\s+zealand|ireland|nigeria|south\s+africa)\b/i,
+    pattern:
+      /\b(?:united\s+states|usa|u\.s\.a\.?|us|united\s+kingdom|uk|britain|england|canada|australia|new\s+zealand|ireland|nigeria|south\s+africa)\b/i,
     codes: ["en", "eng", "english"],
+    display: "English",
   },
-  { pattern: /\b(?:spain|mexico|colombia|argentina|chile|peru)\b/i, codes: ["es", "spa", "spanish", "español"] },
-  { pattern: /\b(?:france|belgium)\b/i, codes: ["fr", "fra", "fre", "french", "français"] },
-  { pattern: /\b(?:germany|austria)\b/i, codes: ["de", "deu", "ger", "german", "deutsch"] },
-  { pattern: /\b(?:italy)\b/i, codes: ["it", "ita", "italian", "italiano"] },
-  { pattern: /\b(?:turkey|türkiye)\b/i, codes: ["tr", "tur", "turkish", "türkçe"] },
-  { pattern: /\b(?:indonesia)\b/i, codes: ["id", "ind", "indonesian"] },
-  { pattern: /\b(?:philippines)\b/i, codes: ["tl", "fil", "tagalog", "filipino", "en", "eng", "english"] },
-  { pattern: /\b(?:india)\b/i, codes: ["hi", "hin", "hindi", "ta", "tam", "tamil", "te", "tel", "telugu", "ml", "kn", "bn", "en"] },
+  { pattern: /\b(?:spain|mexico|colombia|argentina|chile|peru)\b/i, codes: ["es", "spa", "spanish", "español"], display: "Spanish" },
+  { pattern: /\b(?:france|belgium)\b/i, codes: ["fr", "fra", "fre", "french", "français"], display: "French" },
+  { pattern: /\b(?:germany|austria)\b/i, codes: ["de", "deu", "ger", "german", "deutsch"], display: "German" },
+  { pattern: /\b(?:italy)\b/i, codes: ["it", "ita", "italian", "italiano"], display: "Italian" },
+  { pattern: /\b(?:turkey|türkiye)\b/i, codes: ["tr", "tur", "turkish", "türkçe"], display: "Turkish" },
+  { pattern: /\b(?:indonesia)\b/i, codes: ["id", "ind", "indonesian"], display: "Indonesian" },
+  { pattern: /\b(?:philippines)\b/i, codes: ["tl", "fil", "tagalog", "filipino", "en", "eng", "english"], display: "Filipino" },
+  {
+    pattern: /\b(?:india)\b/i,
+    codes: ["hi", "hin", "hindi", "ta", "tam", "tamil", "te", "tel", "telugu", "ml", "kn", "bn", "en"],
+    display: "Indian Original",
+  },
 ];
 
 const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
   ko: "Korean",
   kor: "Korean",
+  korean: "Korean",
   ja: "Japanese",
   jpn: "Japanese",
+  japanese: "Japanese",
   zh: "Chinese",
   zho: "Chinese",
   chi: "Chinese",
   cmn: "Mandarin",
   yue: "Cantonese",
+  chinese: "Chinese",
+  mandarin: "Mandarin",
   en: "English",
   eng: "English",
+  english: "English",
   th: "Thai",
   tha: "Thai",
+  thai: "Thai",
   es: "Spanish",
   spa: "Spanish",
+  spanish: "Spanish",
   fr: "French",
   fra: "French",
   fre: "French",
+  french: "French",
   de: "German",
   deu: "German",
   ger: "German",
@@ -129,27 +149,44 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
   por: "Portuguese",
   tr: "Turkish",
   tur: "Turkish",
+  turkish: "Turkish",
   ru: "Russian",
   rus: "Russian",
+  russian: "Russian",
   ar: "Arabic",
   ara: "Arabic",
+  arabic: "Arabic",
   id: "Indonesian",
   ind: "Indonesian",
+  indonesian: "Indonesian",
   tl: "Tagalog",
+  tgl: "Tagalog",
+  tagalog: "Tagalog",
   fil: "Filipino",
+  filipino: "Filipino",
   vi: "Vietnamese",
   vie: "Vietnamese",
   hi: "Hindi",
   hin: "Hindi",
+  hindi: "Hindi",
   ta: "Tamil",
   tam: "Tamil",
+  tamil: "Tamil",
   te: "Telugu",
   tel: "Telugu",
+  telugu: "Telugu",
   ml: "Malayalam",
+  mal: "Malayalam",
+  malayalam: "Malayalam",
   kn: "Kannada",
+  kan: "Kannada",
+  kannada: "Kannada",
   bn: "Bengali",
+  ben: "Bengali",
+  bengali: "Bengali",
   ur: "Urdu",
   urd: "Urdu",
+  urdu: "Urdu",
   und: "Original Audio",
 };
 
@@ -160,7 +197,8 @@ const LANGUAGE_DISPLAY_NAMES: Record<string, string> = {
 export function cleanBaseTitle(rawTitle: string | null | undefined): string {
   if (!rawTitle) return "";
   return rawTitle
-    .replace(BRACKETED_DUB_RE, " ")
+    .replace(BRACKETED_LANG_STRIP_RE, " ")
+    .replace(/[\[(\{]\s*(?:english|eng)\s+dub(?:bed)?\s*[\])\}]/gi, " ")
     .replace(/[\[(\{]\s*dual\s*audio\s*[\])\}]/gi, " ")
     .replace(EXPLICIT_PHRASE_DUB_RE, " ")
     .replace(DUAL_HINDI_RE, " ")
@@ -179,7 +217,7 @@ export function normalizeTitleKey(rawTitle: string | null | undefined): string {
 /** True when the user explicitly typed "hindi", "tamil", "dubbed", etc. in Search. */
 export function queryExplicitlyRequestsDub(query: string | null | undefined): boolean {
   if (!query) return false;
-  return QUERY_DUB_REQUEST_RE.test(query.trim());
+  return QUERY_HINDI_OR_DUB_REQUEST_RE.test(query.trim());
 }
 
 export function inferOriginalLanguageCodes(country: string | null | undefined): readonly string[] {
@@ -190,13 +228,67 @@ export function inferOriginalLanguageCodes(country: string | null | undefined): 
   return [];
 }
 
+export function inferOriginalLanguageDisplay(country: string | null | undefined): string | null {
+  if (!country) return null;
+  for (const entry of COUNTRY_LANGUAGE_MAP) {
+    if (entry.pattern.test(country)) return entry.display;
+  }
+  return null;
+}
+
 export function isIndianOrigin(country: string | null | undefined): boolean {
   return Boolean(country && /\bindia\b/i.test(country));
 }
 
 /**
- * Detects whether metadata (title, slug, badge, language label/code) marks an
- * item or stream as a Hindi dub.
+ * Extracts explicit dub language name from a title or slug (e.g. `"Hindi"`, `"Tamil"`, `"English"`),
+ * or `null` if the title/slug has no dub tag (i.e. it is the Original Audio release).
+ */
+export function detectTitleOrSlugDubLanguage(
+  title: string | null | undefined,
+  slug: string | null | undefined,
+): string | null {
+  const t = title?.trim() ?? "";
+  const s = slug?.trim() ?? "";
+
+  if (t) {
+    const bracketMatch = BRACKETED_LANG_RE.exec(t);
+    if (bracketMatch?.[1]) {
+      const key = bracketMatch[1].toLowerCase();
+      return LANGUAGE_DISPLAY_NAMES[key] ?? bracketMatch[1];
+    }
+    const phraseMatch = EXPLICIT_PHRASE_DUB_RE.exec(t);
+    if (phraseMatch?.[1]) {
+      const key = phraseMatch[1].toLowerCase();
+      return LANGUAGE_DISPLAY_NAMES[key] ?? phraseMatch[1];
+    }
+    const suffixMatch = SUFFIX_DUB_RE.exec(t);
+    if (suffixMatch?.[1]) {
+      const key = suffixMatch[1].toLowerCase();
+      return LANGUAGE_DISPLAY_NAMES[key] ?? suffixMatch[1];
+    }
+    if (DUAL_HINDI_RE.test(t)) return "Hindi";
+  }
+
+  if (s) {
+    if (/-(?:in-hindi|hindi-dub|hindi-dubbed)(?:-|$)/i.test(s)) return "Hindi";
+    const slugMatch = SLUG_LANG_TOKEN_RE.exec(s);
+    if (slugMatch?.[1]) {
+      const token = slugMatch[1].toLowerCase();
+      const base = cleanBaseTitle(t).toLowerCase();
+      if (!base || !base.includes(token)) {
+        return LANGUAGE_DISPLAY_NAMES[token] ?? slugMatch[1];
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Detects whether metadata marks an item or stream as a Hindi dub.
+ * NOTE: Catalogue filtering NEVER passes `item.badge` here because Moviebox
+ * puts multi-audio availability badges on Original shows too.
  */
 export function isHindiDubMetadata(meta: {
   title?: string | null;
@@ -218,7 +310,6 @@ export function isHindiDubMetadata(meta: {
     return true;
   }
 
-  // Title has explicit `[Hindi]`, `(Hindi)`, `- Hindi`, `In Hindi`, `Hindi Dubbed`, `Dual Audio Hindi`
   if (title) {
     if (/[\[(\{][^\])}]*\b(?:hindi|hin)\b[^\])}]*[\])\}]/i.test(title)) return true;
     if (/\bhindi\s+(?:dub|dubbed|audio|version|voice)\b/i.test(title)) return true;
@@ -228,9 +319,8 @@ export function isHindiDubMetadata(meta: {
 
   if (slug) {
     if (/-(?:in-hindi|hindi-dub|hindi-dubbed)(?:-|$)/i.test(slug)) return true;
-    const slugMatch = /-(hindi)(?:-[a-z0-9]{5,16})?$/i.exec(slug);
+    const slugMatch = /-(hindi)(?:-(?:dub|dubbed|audio|version|movie))?(?:-[a-z0-9]{5,16})?$/i.exec(slug);
     if (slugMatch) {
-      // Only treat `-hindi-<id>` as a dub if "hindi" isn't genuinely part of the clean title (e.g. "Hindi Medium")
       const base = cleanBaseTitle(title).toLowerCase();
       if (!base || !base.includes("hindi")) {
         return true;
@@ -242,8 +332,8 @@ export function isHindiDubMetadata(meta: {
 }
 
 /**
- * Detects whether metadata marks an item or stream as ANY non-original dub
- * (Hindi, Tamil, Telugu, Urdu, Tagalog, Arabic, Russian, French dub, etc.).
+ * Detects whether stream/detail metadata marks an entry as a regional dub
+ * (Hindi, Tamil, Telugu, Malayalam, Kannada, Bengali, Urdu, Tagalog).
  */
 export function isDubbedMetadata(meta: {
   title?: string | null;
@@ -263,28 +353,29 @@ export function isDubbedMetadata(meta: {
 
   if (lanName && /\boriginal\b/i.test(lanName)) return false;
 
-  if (badge) {
-    if (BRACKETED_DUB_RE.test(`[${badge}]`) || /\bdub(?:bed)?\b/i.test(badge)) {
-      BRACKETED_DUB_RE.lastIndex = 0;
-      return true;
-    }
-    BRACKETED_DUB_RE.lastIndex = 0;
+  if (badge && /\b(?:tamil|telugu|malayalam|kannada|bengali|urdu|tagalog)\s*(?:dub|dubbed)?\b/i.test(badge)) {
+    return true;
   }
 
   if (title) {
-    BRACKETED_DUB_RE.lastIndex = 0;
-    if (BRACKETED_DUB_RE.test(title)) {
-      BRACKETED_DUB_RE.lastIndex = 0;
+    if (
+      /[\[(\{]\s*(?:in\s+)?(?:tamil|tam|telugu|tel|malayalam|mal|kannada|kan|bengali|ben|urdu|urd|tagalog|tgl|filipino)(?:\s*[-–/&,+\s]*\s*(?:dub|dubbed|audio|version))*\s*[\])\}]/i.test(
+        title,
+      )
+    ) {
       return true;
     }
-    BRACKETED_DUB_RE.lastIndex = 0;
-    if (EXPLICIT_PHRASE_DUB_RE.test(title) || SUFFIX_DUB_RE.test(title)) return true;
+    if (SUFFIX_DUB_RE.test(title) || EXPLICIT_PHRASE_DUB_RE.test(title)) return true;
   }
 
   if (slug) {
-    if (SLUG_EXPLICIT_DUB_RE.test(slug)) return true;
-    const m = SLUG_DUB_TOKEN_RE.exec(slug);
-    if (m && m[1]) {
+    if (/-(?:tamil-dub|tamil-dubbed|telugu-dub|telugu-dubbed|urdu-dub|urdu-dubbed|tagalog-dub|tagalog-dubbed)(?:-|$)/i.test(slug)) {
+      return true;
+    }
+    const m = /-(tamil|telugu|malayalam|kannada|bengali|urdu|tagalog|filipino)(?:-(?:dub|dubbed|audio|version|movie))?(?:-[a-z0-9]{5,16})?$/i.exec(
+      slug,
+    );
+    if (m?.[1]) {
       const token = m[1].toLowerCase();
       const base = cleanBaseTitle(title).toLowerCase();
       if (!base || !base.includes(token)) {
@@ -304,9 +395,14 @@ export function isDubbedMetadata(meta: {
 }
 
 /**
- * Filters out Hindi & regional dub clones from catalogue lists (`/home`, `/search`,
- * `categories`) unless the user's query explicitly asked for a dub, while
- * deduplicating clean original titles.
+ * Safe, surgical catalogue filter for `/home` and `/search`:
+ * - NEVER inspects `item.badge` (which on Moviebox lists available languages on
+ *   Original shows and would falsely strip top Home rails!).
+ * - ONLY removes explicit `[Hindi]` / `(Hindi)` / `-hindi-` / South-Asian dub
+ *   clone cards based on `item.name` and `item.slug`.
+ * - NEVER empties a section or result list: if every item in a rail happened to
+ *   have a dub slug, keeps them all intact so Home sections never disappear
+ *   (and `fetchDetail` / Player Audio Switcher switches them to Original Audio!).
  */
 export function filterOriginalCatalogueItems<
   T extends {
@@ -325,28 +421,22 @@ export function filterOriginalCatalogueItems<
 
   const nonDubbed = items.filter(
     (item) =>
+      !isHindiDubMetadata({
+        title: item.name,
+        slug: item.slug,
+      }) &&
       !isDubbedMetadata({
         title: item.name,
         slug: item.slug,
-        badge: item.badge ?? null,
       }),
   );
 
-  // Safety net: if a narrow niche search returned ONLY a dubbed item, keep non-Hindi items first;
-  // for Hindi dubs, strip them whenever at least one clean original exists or in browse feeds.
-  const pool = nonDubbed;
-  const seenKeys = new Set<string>();
-  const out: T[] = [];
-
-  for (const item of pool) {
-    const titleKey = normalizeTitleKey(item.name);
-    const dedupeKey = titleKey ? `${item.mediaType}:${titleKey}:${item.year ?? ""}` : item.subjectId;
-    if (seenKeys.has(dedupeKey)) continue;
-    seenKeys.add(dedupeKey);
-    out.push(item);
+  // Never wipe out a Home section or search page if all returned items had dub slugs!
+  if (nonDubbed.length === 0) {
+    return [...items];
   }
 
-  return out;
+  return nonDubbed;
 }
 
 function strField(obj: Record<string, unknown>, ...keys: string[]): string | null {
@@ -408,170 +498,264 @@ export function parseDubSiblings(...containers: unknown[]): DubSibling[] {
   return out;
 }
 
-function matchesLanguageTokens(
-  codes: readonly string[],
-  lanCode: string | null | undefined,
-  lanName: string | null | undefined,
-): boolean {
+function siblingMatchesLanguage(sib: DubSibling, codes: readonly string[]): boolean {
   if (codes.length === 0) return false;
-  const codeNorm = (lanCode ?? "").trim().toLowerCase();
-  const baseCode = codeNorm.split(/[-_]/)[0] ?? "";
-  const nameNorm = (lanName ?? "").trim().toLowerCase();
+  const code = sib.lanCode?.toLowerCase() ?? "";
+  const name = sib.lanName?.toLowerCase() ?? "";
+  return codes.some((wanted) => {
+    const w = wanted.toLowerCase();
+    return code === w || code.startsWith(`${w}-`) || name === w || name.includes(w);
+  });
+}
 
-  return codes.some((tok) => {
-    const t = tok.toLowerCase();
-    return (
-      codeNorm === t ||
-      baseCode === t ||
-      (nameNorm.length > 0 && (nameNorm === t || nameNorm.includes(t)))
-    );
+function isHindiOrRegionalSibling(sib: DubSibling, country: string | null | undefined): boolean {
+  return isDubbedMetadata({
+    slug: sib.detailPath,
+    lanCode: sib.lanCode,
+    lanName: sib.lanName,
+    country,
   });
 }
 
 /**
- * Given the current `/detail` subject and its `dubs` sibling list, returns the
- * canonical **Original Audio** sibling whenever the current subject is a Hindi
- * or regional dub. Returns `null` if the current subject is already Original.
+ * Given the current `/detail` subject and its `dubs` list, returns the Original
+ * Audio sibling when the current subject is a Hindi/regional dub (or `null` if
+ * the current subject is already the Original Audio release).
  */
-export function pickOriginalDubSibling(opts: {
+export function pickOriginalDubSibling(params: {
   currentSubjectId: string;
   currentTitle: string;
   currentSlug: string;
-  country: string | null;
+  country?: string | null;
   dubs: readonly DubSibling[];
 }): DubSibling | null {
-  const { currentSubjectId, currentTitle, currentSlug, country, dubs } = opts;
+  const { currentSubjectId, currentTitle, currentSlug, country, dubs } = params;
   if (dubs.length === 0) return null;
 
-  const expectedCodes = inferOriginalLanguageCodes(country);
-  const selfEntry = dubs.find((d) => d.subjectId === currentSubjectId) ?? null;
+  const selfInDubs = dubs.find((d) => d.subjectId === currentSubjectId || d.detailPath === currentSlug);
+  const originCodes = inferOriginalLanguageCodes(country);
 
-  // If self is explicitly flagged Original (and title/slug isn't tagged Hindi dub), keep current!
-  if (
-    selfEntry?.isOriginalFlag &&
-    !isDubbedMetadata({
-      title: currentTitle,
-      slug: currentSlug,
-      lanCode: selfEntry.lanCode,
-      lanName: selfEntry.lanName,
-      country,
-    })
-  ) {
-    return null;
+  if (selfInDubs) {
+    if (selfInDubs.isOriginalFlag) return null;
+    if (originCodes.length > 0 && siblingMatchesLanguage(selfInDubs, originCodes) && !isHindiOrRegionalSibling(selfInDubs, country)) {
+      return null;
+    }
   }
 
-  const selfLooksDubbed =
+  const currentLooksDubbed =
     isDubbedMetadata({
       title: currentTitle,
       slug: currentSlug,
-      lanCode: selfEntry?.lanCode ?? null,
-      lanName: selfEntry?.lanName ?? null,
+      lanCode: selfInDubs?.lanCode,
+      lanName: selfInDubs?.lanName,
       country,
-    }) ||
-    Boolean(
-      selfEntry &&
-        !selfEntry.isOriginalFlag &&
-        dubs.some((d) => d.subjectId !== currentSubjectId && d.isOriginalFlag),
-    ) ||
-    Boolean(
-      selfEntry &&
-        expectedCodes.length > 0 &&
-        !matchesLanguageTokens(expectedCodes, selfEntry.lanCode, selfEntry.lanName) &&
-        dubs.some((d) => matchesLanguageTokens(expectedCodes, d.lanCode, d.lanName)),
-    );
+    }) || Boolean(selfInDubs && selfInDubs.type !== null && selfInDubs.type > 0 && !selfInDubs.isOriginalFlag);
 
-  if (!selfLooksDubbed) return null;
+  if (!currentLooksDubbed) return null;
 
-  const others = dubs.filter((d) => d.subjectId !== currentSubjectId);
-  if (others.length === 0) return null;
-
-  // 1. Explicit Original Audio sibling (`type === 0` or `lanName` includes "Original")
-  const explicitOriginal = others.find(
-    (d) =>
-      d.isOriginalFlag &&
-      !isHindiDubMetadata({
-        slug: d.detailPath,
-        lanCode: d.lanCode,
-        lanName: d.lanName,
-        country,
-      }),
+  const explicitOriginal = dubs.find(
+    (d) => d.isOriginalFlag && !isHindiOrRegionalSibling(d, country),
   );
-  if (explicitOriginal) return explicitOriginal;
-
-  // 2. Sibling matching the movie/drama's origin country language (ko, ja, zh, en, etc.)
-  if (expectedCodes.length > 0) {
-    const nativeMatch = others.find((d) => matchesLanguageTokens(expectedCodes, d.lanCode, d.lanName));
-    if (nativeMatch) return nativeMatch;
+  if (explicitOriginal && explicitOriginal.subjectId !== currentSubjectId) {
+    return explicitOriginal;
   }
 
-  // 3. Any clean non-Hindi, non-dubbed sibling (preferring ko/ja/zh/en)
-  const cleanOthers = others.filter(
+  if (originCodes.length > 0) {
+    const countryMatched = dubs.find(
+      (d) => siblingMatchesLanguage(d, originCodes) && !isHindiOrRegionalSibling(d, country),
+    );
+    if (countryMatched && countryMatched.subjectId !== currentSubjectId) {
+      return countryMatched;
+    }
+  }
+
+  const cleanSlugSibling = dubs.find(
     (d) =>
-      !isDubbedMetadata({
-        slug: d.detailPath,
-        lanCode: d.lanCode,
-        lanName: d.lanName,
-        country,
-      }),
+      !isHindiOrRegionalSibling(d, country) &&
+      !isDubbedMetadata({ slug: d.detailPath, lanCode: d.lanCode, lanName: d.lanName, country }),
   );
-  const preferredGlobal = cleanOthers.find((d) =>
-    matchesLanguageTokens(["ko", "ja", "zh", "en"], d.lanCode, d.lanName),
-  );
-  return preferredGlobal ?? cleanOthers[0] ?? null;
+  if (cleanSlugSibling && cleanSlugSibling.subjectId !== currentSubjectId) {
+    return cleanSlugSibling;
+  }
+
+  return null;
 }
 
-function isTrackHindiOrDub(track: MinimalAudioTrack, country?: string | null): boolean {
-  const code = (track.language ?? "").trim().toLowerCase().split(/[-_]/)[0] ?? "";
-  const label = (track.label ?? "").trim();
-  if (/\boriginal\b/i.test(label) && !HINDI_TOKEN_RE.test(label)) return false;
+/**
+ * Builds sorted, human-friendly `AudioVersionOption[]` from Moviebox `dubs` siblings
+ * and/or sibling catalogue items discovered via clean-title search so the viewer
+ * can ALWAYS switch between Original Audio and any dubbed versions!
+ */
+export function buildAudioVersionOptions(params: {
+  currentSubjectId: string;
+  currentDetailPath: string;
+  currentTitle: string;
+  country?: string | null;
+  dubs?: readonly DubSibling[];
+  searchSiblings?: ReadonlyArray<{
+    subjectId: string;
+    slug: string;
+    name: string;
+  }>;
+}): AudioVersionOption[] {
+  const { currentSubjectId, currentDetailPath, currentTitle, country, dubs = [], searchSiblings = [] } = params;
+  const originLangDisplay = inferOriginalLanguageDisplay(country);
+  const originCodes = inferOriginalLanguageCodes(country);
+  const byId = new Map<string, AudioVersionOption>();
 
-  if (!isIndianOrigin(country)) {
-    if (DUB_LANG_CODES.has(code)) return true;
-    if (HINDI_TOKEN_RE.test(label)) return true;
+  const formatOriginalLabel = (explicitLang?: string | null) => {
+    const clean = explicitLang && !/\boriginal\b/i.test(explicitLang) ? explicitLang : originLangDisplay;
+    return clean ? `Original Audio (${clean})` : "Original Audio";
+  };
+
+  for (const d of dubs) {
+    const code = d.lanCode?.toLowerCase() ?? null;
+    const mappedName =
+      (code ? LANGUAGE_DISPLAY_NAMES[code] : null) ??
+      (d.lanName && !/\boriginal\b/i.test(d.lanName) ? d.lanName : null);
+    const isHindi = isHindiDubMetadata({
+      slug: d.detailPath,
+      lanCode: d.lanCode,
+      lanName: d.lanName,
+      country,
+    });
+    const isOrig =
+      !isHindi &&
+      (d.isOriginalFlag ||
+        (originCodes.length > 0 && siblingMatchesLanguage(d, originCodes)) ||
+        !detectTitleOrSlugDubLanguage(d.lanName, d.detailPath));
+
+    const label = isOrig
+      ? formatOriginalLabel(mappedName)
+      : mappedName
+        ? /\bdub/i.test(mappedName)
+          ? mappedName
+          : `${mappedName} Dub`
+        : "Alternate Audio";
+
+    byId.set(d.subjectId, {
+      subjectId: d.subjectId,
+      detailPath: d.detailPath,
+      label,
+      lanCode: code,
+      isOriginal: isOrig,
+      isHindi,
+    });
   }
-  if (/\bdub(?:bed)?\b/i.test(label)) return true;
+
+  for (const item of searchSiblings) {
+    if (byId.has(item.subjectId)) continue;
+    const detectedLang = detectTitleOrSlugDubLanguage(item.name, item.slug);
+    const isHindi = isHindiDubMetadata({ title: item.name, slug: item.slug, country });
+    const isOrig = !isHindi && !detectedLang;
+    const label = isOrig
+      ? formatOriginalLabel(null)
+      : `${detectedLang ?? "Alternate"} Dub`;
+
+    byId.set(item.subjectId, {
+      subjectId: item.subjectId,
+      detailPath: item.slug,
+      label,
+      lanCode: detectedLang ? detectedLang.toLowerCase().slice(0, 2) : null,
+      isOriginal: isOrig,
+      isHindi,
+    });
+  }
+
+  // Ensure the currently loaded subject is always represented
+  if (currentSubjectId && currentDetailPath && !byId.has(currentSubjectId)) {
+    const detectedLang = detectTitleOrSlugDubLanguage(currentTitle, currentDetailPath);
+    const isHindi = isHindiDubMetadata({ title: currentTitle, slug: currentDetailPath, country });
+    const isOrig = !isHindi && !detectedLang;
+    byId.set(currentSubjectId, {
+      subjectId: currentSubjectId,
+      detailPath: currentDetailPath,
+      label: isOrig ? formatOriginalLabel(null) : `${detectedLang ?? "Hindi"} Dub`,
+      lanCode: isHindi ? "hi" : null,
+      isOriginal: isOrig,
+      isHindi,
+    });
+  }
+
+  const list = [...byId.values()];
+  list.sort((a, b) => {
+    if (a.isOriginal !== b.isOriginal) return a.isOriginal ? -1 : 1;
+    if (a.isHindi !== b.isHindi) return a.isHindi ? 1 : -1;
+    return a.label.localeCompare(b.label);
+  });
+
+  // Disambiguate if multiple entries share the exact same label
+  const labelCounts = new Map<string, number>();
+  for (const opt of list) {
+    labelCounts.set(opt.label, (labelCounts.get(opt.label) ?? 0) + 1);
+  }
+  const seenIdx = new Map<string, number>();
+  return list.map((opt) => {
+    if ((labelCounts.get(opt.label) ?? 0) <= 1) return opt;
+    const idx = (seenIdx.get(opt.label) ?? 0) + 1;
+    seenIdx.set(opt.label, idx);
+    return idx === 1 ? opt : { ...opt, label: `${opt.label} #${idx}` };
+  });
+}
+
+function normalizeTrackTokens(track: MinimalAudioTrack): {
+  code: string;
+  label: string;
+  combined: string;
+} {
+  const code = (track.language ?? "").trim().toLowerCase();
+  const label = (track.label ?? "").trim().toLowerCase();
+  return { code, label, combined: `${code} ${label}`.trim() };
+}
+
+function isTrackHindiOrRegionalDub(track: MinimalAudioTrack, country?: string | null): boolean {
+  if (isIndianOrigin(country)) return false;
+  const { code, label, combined } = normalizeTrackTokens(track);
+  if (!combined) return false;
+  const baseCode = code.split(/[-_]/)[0] ?? "";
+  if (DUB_LANG_CODES.has(code) || DUB_LANG_CODES.has(baseCode)) return true;
+  if (/\b(?:hindi|tamil|telugu|malayalam|kannada|bengali|urdu|marathi|punjabi)\b/i.test(combined)) {
+    return true;
+  }
+  if (/\bdub(?:bed)?\b/i.test(label) && !/\boriginal\b/i.test(label)) {
+    return true;
+  }
   return false;
 }
 
 /**
- * Chooses the Original Audio track from ExoPlayer's `availableAudioTracks`
- * so dual-audio MP4/HLS containers never play Track 0 Hindi by accident.
+ * Chooses the best Original Audio track when an MP4 or HLS stream contains
+ * multiple audio tracks (e.g. Track 0 = Hindi `hi`, Track 1 = Korean `ko` / Japanese `ja` / English `en`).
  */
 export function pickOriginalAudioTrack<T extends MinimalAudioTrack>(
   tracks: readonly T[],
   country?: string | null,
 ): T | null {
-  if (tracks.length === 0) return null;
-  if (tracks.length === 1) return tracks[0] ?? null;
+  if (tracks.length <= 1) return tracks[0] ?? null;
 
-  const expectedCodes = inferOriginalLanguageCodes(country);
+  const originCodes = inferOriginalLanguageCodes(country);
 
-  // 1. Track explicitly marked "Original" (and not Hindi)
-  const explicitOriginal = tracks.find(
-    (t) => Boolean(t.label && /\boriginal\b/i.test(t.label)) && !isTrackHindiOrDub(t, country),
-  );
-  if (explicitOriginal) return explicitOriginal;
+  const explicitOrig = tracks.find((t) => {
+    const { label } = normalizeTrackTokens(t);
+    return /\boriginal\b/i.test(label) && !isTrackHindiOrRegionalDub(t, country);
+  });
+  if (explicitOrig) return explicitOrig;
 
-  // 2. Track matching the title's country of origin (Korean for KR, Japanese for JP, English for US/UK, etc.)
-  if (expectedCodes.length > 0) {
-    const countryMatch = tracks.find(
-      (t) => matchesLanguageTokens(expectedCodes, t.language, t.label) && !isTrackHindiOrDub(t, country),
-    );
-    if (countryMatch) return countryMatch;
+  if (originCodes.length > 0) {
+    const originMatch = tracks.find((t) => {
+      if (isTrackHindiOrRegionalDub(t, country)) return false;
+      const { code, label } = normalizeTrackTokens(t);
+      const baseCode = code.split(/[-_]/)[0] ?? "";
+      return originCodes.some((wanted) => {
+        const w = wanted.toLowerCase();
+        return code === w || baseCode === w || label === w || label.includes(w);
+      });
+    });
+    if (originMatch) return originMatch;
   }
 
-  // 3. Filter out Hindi & dubbed tracks, preferring ko / ja / zh / en / und
-  const nonDubTracks = tracks.filter((t) => !isTrackHindiOrDub(t, country));
-  if (nonDubTracks.length > 0) {
-    const primaryMatch = nonDubTracks.find((t) =>
-      matchesLanguageTokens(
-        ["ko", "kor", "korean", "ja", "jpn", "japanese", "zh", "zho", "chi", "chinese", "en", "eng", "english"],
-        t.language,
-        t.label,
-      ),
-    );
-    return primaryMatch ?? nonDubTracks[0] ?? null;
-  }
+  const nonDubTrack = tracks.find((t) => !isTrackHindiOrRegionalDub(t, country));
+  if (nonDubTrack) return nonDubTrack;
 
   return tracks[0] ?? null;
 }
@@ -582,28 +766,34 @@ export function formatAudioTrackLabel(
   index: number,
   country?: string | null,
 ): string {
-  const rawLabel = (track.label ?? "").trim();
-  const rawCode = (track.language ?? "").trim().toLowerCase();
-  const baseCode = rawCode.split(/[-_]/)[0] ?? "";
-  const friendlyLang = LANGUAGE_DISPLAY_NAMES[rawCode] ?? LANGUAGE_DISPLAY_NAMES[baseCode] ?? null;
+  const rawLabel = track.label?.trim() ?? "";
+  const rawLang = track.language?.trim() ?? "";
+  const baseCode = rawLang.toLowerCase().split(/[-_]/)[0] ?? "";
+  const mappedName =
+    LANGUAGE_DISPLAY_NAMES[rawLang.toLowerCase()] ??
+    LANGUAGE_DISPLAY_NAMES[baseCode] ??
+    null;
 
-  const expectedCodes = inferOriginalLanguageCodes(country);
-  const isNativeOriginal =
-    Boolean(rawLabel && /\boriginal\b/i.test(rawLabel)) ||
-    (expectedCodes.length > 0 && matchesLanguageTokens(expectedCodes, rawCode, rawLabel));
+  const originCodes = inferOriginalLanguageCodes(country);
+  const isOriginMatch =
+    originCodes.length > 0 &&
+    originCodes.some((c) => c === rawLang.toLowerCase() || c === baseCode);
+  const isDub = isTrackHindiOrRegionalDub(track, country);
 
   let base =
-    rawLabel && !/^track\s*\d+$/i.test(rawLabel) && rawLabel.toLowerCase() !== rawCode
-      ? friendlyLang && !rawLabel.toLowerCase().includes(friendlyLang.toLowerCase())
-        ? `${friendlyLang} · ${rawLabel}`
-        : rawLabel
-      : friendlyLang ?? (rawCode ? rawCode.toUpperCase() : `Audio Track ${index + 1}`);
+    rawLabel && rawLabel.toLowerCase() !== "unknown" && rawLabel.toLowerCase() !== "und"
+      ? rawLabel
+      : mappedName ?? (rawLang ? rawLang.toUpperCase() : `Audio Track ${index + 1}`);
 
-  if (isNativeOriginal && !/\boriginal\b/i.test(base)) {
-    base = `${base} (Original)`;
-  } else if (isTrackHindiOrDub(track, country) && !/\bdub\b/i.test(base)) {
-    base = `${base} (Dub)`;
+  if (mappedName && base.toLowerCase() === rawLang.toLowerCase()) {
+    base = mappedName;
   }
 
+  if (isOriginMatch && !/\boriginal\b/i.test(base)) {
+    return `${base} (Original)`;
+  }
+  if (isDub && !/\bdub\b/i.test(base)) {
+    return `${base} (Dub)`;
+  }
   return base;
 }

@@ -162,7 +162,6 @@ export function TvApp() {
                     <Stack.Navigator
                       screenOptions={{
                         headerShown: false,
-                        freezeOnBlur: true,
                         animation: "fade",
                         contentStyle: { backgroundColor: palette.background },
                       }}

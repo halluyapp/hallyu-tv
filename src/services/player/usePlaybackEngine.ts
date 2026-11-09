@@ -7,7 +7,13 @@ import { AppState } from "react-native";
 import { IS_TV } from "@/config/appVariant";
 import { classifyPlayerError, playerErrorMessage, type PlayerErrorKind } from "@/services/player/classify";
 import { pickAdaptiveSource, shouldDownshift } from "@/services/player/playbackPolicy";
-import { fetchCaptions, fetchCaptionText, resolveOriginalStreams } from "@/services/provider/adapter";
+import {
+  fetchAudioVersions,
+  fetchCaptions,
+  fetchCaptionText,
+  resolveOriginalStreams,
+  resolveStreams,
+} from "@/services/provider/adapter";
 import { PROVIDER_MEDIA_HEADERS } from "@/services/provider/client";
 import { loadDetailCached, peekCachedDetail } from "@/services/provider/detailCache";
 import { pickOriginalAudioTrack } from "@/services/provider/originalAudio";
@@ -23,7 +29,7 @@ import { loadCues, pickPreferredTrack, saveCues, subtitleKey } from "@/services/
 import { cueAt, parseSubtitles, type Cue } from "@/services/subtitles/srt";
 import { COMPLETION_THRESHOLD, useLibrary } from "@/state/LibraryContext";
 import { languageMatchTokens, usePreferences } from "@/state/PreferencesContext";
-import type { CaptionTrack, StreamSource } from "@/types/provider";
+import type { AudioVersionOption, CaptionTrack, StreamSource } from "@/types/provider";
 
 export interface PlaybackRouteParams {
   subjectId: string;
@@ -31,6 +37,7 @@ export interface PlaybackRouteParams {
   title: string;
   posterUrl: string | null;
   country?: string | null;
+  audioVersions?: AudioVersionOption[];
   mediaType: "movie" | "series";
   season: number;
   episode: number;
@@ -76,6 +83,10 @@ export function usePlaybackEngine(
   const { saveProgress } = useLibrary();
   const { prefs, updatePrefs } = usePreferences();
   const { play } = useSound();
+
+  // Active subject/slug can be hot-swapped live when the viewer switches Audio Version!
+  const [activeSubjectId, setActiveSubjectId] = useState(subjectId);
+  const [activeDetailPath, setActiveDetailPath] = useState(detailPath);
 
   const [pipSupported] = useState(() => {
     try {
@@ -127,6 +138,13 @@ export function usePlaybackEngine(
   const [effectiveCountry, setEffectiveCountry] = useState<string | null>(
     () => params.country ?? (detailPath ? peekCachedDetail(detailPath)?.country ?? null : null),
   );
+
+  const [audioVersions, setAudioVersions] = useState<AudioVersionOption[]>(
+    () => params.audioVersions ?? (detailPath ? peekCachedDetail(detailPath)?.audioVersions ?? [] : []),
+  );
+  const [audioVersionsLoading, setAudioVersionsLoading] = useState(false);
+  const [audioSwitchToast, setAudioSwitchToast] = useState<string | null>(null);
+  const audioVersionsLoadedRef = useRef(false);
   const manualAudioOverrideRef = useRef(false);
 
   const mountedRef = useRef(true);
@@ -147,16 +165,20 @@ export function usePlaybackEngine(
   const autoSubtitleRef = useRef(false);
   const subtitleOptOutRef = useRef(prefs.preferredSubtitleLang === "off");
   const captionAbortRef = useRef<AbortController | null>(null);
+  const audioVersionsAbortRef = useRef<AbortController | null>(null);
+  const trackInspectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captionSeqRef = useRef(0);
 
   const episodeKey = `${subjectId}|${detailPath}|${season}|${episode}|${isTrailer ? "tr" : "main"}`;
-  const cueKey = subtitleKey(subjectId, season, episode);
+  const cueKey = subtitleKey(activeSubjectId, season, episode);
   const lastEpisodeKeyRef = useRef(episodeKey);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (trackInspectTimerRef.current) clearTimeout(trackInspectTimerRef.current);
+      audioVersionsAbortRef.current?.abort();
     };
   }, []);
 
@@ -171,9 +193,10 @@ export function usePlaybackEngine(
     }
   });
 
+  // Only subscribe to the 3 battle-tested player events (never `availableAudioTracksChange`,
+  // which exposes ExoPlayer's non-thread-safe ArrayList across JSI on Android).
   const playingEvent = useEvent(player, "playingChange", { isPlaying: false });
   const statusEvent = useEvent(player, "statusChange", { status: "loading" as const, error: undefined });
-  const audioTracksEvent = useEvent(player, "availableAudioTracksChange", { availableAudioTracks: [] });
   const timeEvent = useEvent(player, "timeUpdate", {
     currentTime: Math.max(0, resumeAt),
     currentLiveTimestamp: null,
@@ -189,7 +212,8 @@ export function usePlaybackEngine(
   );
 
   useEffect(() => {
-    setIsPlaying(playingEvent.isPlaying);
+    if (!playingEvent) return;
+    setIsPlaying(Boolean(playingEvent.isPlaying));
     if (playingEvent.isPlaying) setBuffering(false);
   }, [playingEvent]);
 
@@ -244,7 +268,10 @@ export function usePlaybackEngine(
       const at = positionRef.current;
       state.triedUrls.add(current.url);
       try {
-        const res = await resolveOriginalStreams(subjectId, detailPath, season, episode);
+        const res = await resolveOriginalStreams(activeSubjectId, activeDetailPath, season, episode);
+        if (res.subjectId && res.subjectId !== activeSubjectId) {
+          setActiveSubjectId(res.subjectId);
+        }
         setAvailableSources(res.sources);
         const now = Date.now();
         stallTimesRef.current = stallTimesRef.current.filter((ts) => now - ts <= 90_000);
@@ -264,7 +291,7 @@ export function usePlaybackEngine(
         state.running = false;
       }
     },
-    [applySource, detailPath, episode, isTrailer, season, showError, subjectId],
+    [activeDetailPath, activeSubjectId, applySource, episode, isTrailer, season, showError],
   );
 
   // Episode change reset
@@ -278,7 +305,10 @@ export function usePlaybackEngine(
     autoNextCancelledRef.current = false;
     autoSubtitleRef.current = false;
     manualAudioOverrideRef.current = false;
+    audioVersionsLoadedRef.current = false;
     subtitleOptOutRef.current = prefs.preferredSubtitleLang === "off";
+    setActiveSubjectId(subjectId);
+    setActiveDetailPath(detailPath);
     setNextCountdown(null);
     setAvailableSources(sources);
     setTracks(isTrailer ? null : takePrefetchedCaptions(subjectId, detailPath, season, episode));
@@ -298,9 +328,9 @@ export function usePlaybackEngine(
       if (next) void applySource(next, Math.max(0, resumeAt));
       else showError("format", "No playable full-length source was returned for this episode.");
     }
-  }, [applySource, episodeKey, pickInitial, prefs.preferredSubtitleLang, resumeAt, showError, sources]);
+  }, [applySource, detailPath, episode, episodeKey, isTrailer, pickInitial, prefs.preferredSubtitleLang, resumeAt, season, showError, sources, subjectId]);
 
-  // Resolve on arrival when sources array is empty (e.g. Next Episode / Episode Switcher)
+  // Resolve on arrival when sources array is empty (e.g. 0ms Home Launch / Next Episode / Episode Switcher)
   useEffect(() => {
     if (sources.length > 0 || !detailPath || isTrailer) return;
     setStatus("loading");
@@ -309,6 +339,9 @@ export function usePlaybackEngine(
       try {
         const res = await resolveOriginalStreams(subjectId, detailPath, season, episode);
         if (cancelled || !mountedRef.current) return;
+        if (res.subjectId && res.subjectId !== subjectId) {
+          setActiveSubjectId(res.subjectId);
+        }
         setAvailableSources(res.sources);
         const picked = selectPreferredSource(res.sources, prefs.preferredQuality, IS_TV);
         if (!picked) throw new Error("empty");
@@ -325,75 +358,169 @@ export function usePlaybackEngine(
     };
   }, [applySource, detailPath, episode, isTrailer, prefs.preferredQuality, resumeAt, season, showError, sources, subjectId]);
 
-  // Hydrate origin country if not supplied so dual-audio streams pick Korean/Japanese/Chinese/English accurately
+  // Hydrate origin country & cached audioVersions if not supplied
   useEffect(() => {
     if (params.country) {
       setEffectiveCountry(params.country);
-      return;
     }
-    if (!detailPath || isTrailer) return;
-    const warm = peekCachedDetail(detailPath);
-    if (warm?.country) {
-      setEffectiveCountry(warm.country);
+    if (!activeDetailPath || isTrailer) return;
+    const warm = peekCachedDetail(activeDetailPath);
+    if (warm) {
+      if (!params.country && warm.country) setEffectiveCountry(warm.country);
+      if (warm.audioVersions && warm.audioVersions.length > 0) {
+        setAudioVersions((prev) => (prev.length >= warm.audioVersions!.length ? prev : warm.audioVersions!));
+      }
       return;
     }
     let cancelled = false;
-    loadDetailCached(detailPath)
+    loadDetailCached(activeDetailPath)
       .then((d) => {
-        if (!cancelled && d.country) setEffectiveCountry(d.country);
+        if (cancelled) return;
+        if (d.country) setEffectiveCountry(d.country);
+        if (d.audioVersions && d.audioVersions.length > 0) {
+          setAudioVersions((prev) => (prev.length >= d.audioVersions!.length ? prev : d.audioVersions!));
+        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [detailPath, isTrailer, params.country]);
+  }, [activeDetailPath, isTrailer, params.country]);
 
-  const applyOriginalAudioSelection = useCallback(
-    (audioList: readonly AudioTrack[]) => {
-      if (isTrailer || manualAudioOverrideRef.current || audioList.length <= 1) return;
-      const preferred = pickOriginalAudioTrack(audioList, effectiveCountry);
-      if (!preferred) return;
+  /**
+   * Discovers all sibling Audio Versions (`Original Audio`, `English`, `Korean`,
+   * `Japanese`, `Hindi Dub`, etc.) from `/detail` `dubs` + `/search` clean-title siblings.
+   */
+  const loadAudioVersions = useCallback(async () => {
+    if (isTrailer || offline || !activeDetailPath || audioVersionsLoading) return;
+    setAudioVersionsLoading(true);
+    audioVersionsAbortRef.current?.abort();
+    const controller = new AbortController();
+    audioVersionsAbortRef.current = controller;
+    try {
+      const list = await fetchAudioVersions(
+        {
+          subjectId: activeSubjectId,
+          detailPath: activeDetailPath,
+          title,
+          mediaType,
+          country: effectiveCountry,
+          existingVersions: audioVersions,
+        },
+        controller.signal,
+      );
+      if (!controller.signal.aborted && mountedRef.current && list.length > 0) {
+        setAudioVersions(list);
+        audioVersionsLoadedRef.current = true;
+      }
+    } catch {
+      // Non-fatal
+    } finally {
+      if (!controller.signal.aborted && mountedRef.current) {
+        setAudioVersionsLoading(false);
+      }
+    }
+  }, [activeDetailPath, activeSubjectId, audioVersions, audioVersionsLoading, effectiveCountry, isTrailer, mediaType, offline, title]);
+
+  // Quietly pre-discover sibling Audio Versions 1.2s after playback becomes ready so the Audio sheet is instant!
+  useEffect(() => {
+    if (isTrailer || offline || status !== "ready" || audioVersionsLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      void loadAudioVersions();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [isTrailer, loadAudioVersions, offline, status]);
+
+  /**
+   * Hot-swaps the active stream to another Audio Version (e.g. `Original Audio`)
+   * at the exact current timestamp (`positionRef.current`) without leaving the Player!
+   */
+  const switchAudioVersion = useCallback(
+    async (version: AudioVersionOption) => {
+      if (!version.subjectId || !version.detailPath) return;
+      if (version.subjectId === activeSubjectId && version.detailPath === activeDetailPath) return;
+
+      const at = positionRef.current;
+      manualAudioOverrideRef.current = true;
+      setAudioSwitchToast(`Switching to ${version.label}…`);
+      setStatus("loading");
+      setBuffering(true);
+      recoveryRef.current = { attempts: 0, triedUrls: new Set<string>(), running: false };
+
       try {
-        if (player.audioTrack?.id !== preferred.id) {
-          player.audioTrack = preferred;
-        }
-        setNativeAudioId(preferred.id);
-      } catch {}
+        const res = await resolveStreams(version.subjectId, version.detailPath, season, episode);
+        if (!mountedRef.current) return;
+        setActiveSubjectId(version.subjectId);
+        setActiveDetailPath(version.detailPath);
+        setAvailableSources(res.sources);
+        setTracks(null);
+        const picked = selectPreferredSource(res.sources, prefs.preferredQuality, IS_TV);
+        if (!picked) throw new Error("No playable source");
+        await applySource(picked, at);
+        setAudioSwitchToast(`Playing ${version.label}`);
+        setTimeout(() => {
+          if (mountedRef.current) setAudioSwitchToast(null);
+        }, 2500);
+      } catch {
+        if (!mountedRef.current) return;
+        setStatus("ready");
+        setBuffering(false);
+        setAudioSwitchToast(`Could not switch to ${version.label} right now.`);
+        setTimeout(() => {
+          if (mountedRef.current) setAudioSwitchToast(null);
+        }, 3000);
+      }
     },
-    [effectiveCountry, isTrailer, player],
+    [activeDetailPath, activeSubjectId, applySource, episode, prefs.preferredQuality, season],
   );
 
+  /**
+   * Thread-safe snapshot of ExoPlayer's native embedded audio & subtitle tracks,
+   * plus automatic switching away from Track 0 Hindi to Original Audio when a
+   * dual-audio MP4/HLS container is loaded.
+   */
   const refreshNativeTracks = useCallback(() => {
     try {
-      const audioList = [...player.availableAudioTracks];
-      setNativeAudioTracks(audioList);
-      setNativeSubtitleTracks([...player.availableSubtitleTracks]);
-      setNativeAudioId(player.audioTrack?.id ?? null);
+      const rawAudio = player.availableAudioTracks ? Array.from(player.availableAudioTracks) : [];
+      const rawSubtitles = player.availableSubtitleTracks ? Array.from(player.availableSubtitleTracks) : [];
+      setNativeAudioTracks(rawAudio);
+      setNativeSubtitleTracks(rawSubtitles);
+      const currentId = player.audioTrack?.id ?? null;
+      setNativeAudioId(currentId);
       setNativeSubtitleId(player.subtitleTrack?.id ?? null);
-      applyOriginalAudioSelection(audioList);
-    } catch {}
-  }, [applyOriginalAudioSelection, player]);
 
-  useEffect(() => {
-    if (audioTracksEvent.availableAudioTracks.length > 0) {
-      const audioList = [...audioTracksEvent.availableAudioTracks];
-      setNativeAudioTracks(audioList);
-      applyOriginalAudioSelection(audioList);
+      if (!isTrailer && !manualAudioOverrideRef.current && rawAudio.length > 1) {
+        const preferred = pickOriginalAudioTrack(rawAudio, effectiveCountry);
+        if (preferred && preferred.id !== currentId) {
+          const nativeMatch = rawAudio.find((t) => t.id === preferred.id);
+          if (nativeMatch) {
+            player.audioTrack = nativeMatch;
+            setNativeAudioId(nativeMatch.id);
+          }
+        }
+      }
+    } catch {
+      // Track inspection is best-effort; never interrupt video playback.
     }
-  }, [applyOriginalAudioSelection, audioTracksEvent]);
+  }, [effectiveCountry, isTrailer, player]);
 
+  // Re-evaluate embedded Original Audio track if `effectiveCountry` arrives shortly after `readyToPlay`
   useEffect(() => {
-    if (nativeAudioTracks.length > 1) {
-      applyOriginalAudioSelection(nativeAudioTracks);
+    if (status === "ready" && nativeAudioTracks.length > 1 && !manualAudioOverrideRef.current) {
+      refreshNativeTracks();
     }
-  }, [applyOriginalAudioSelection, effectiveCountry, nativeAudioTracks]);
+  }, [effectiveCountry, nativeAudioTracks.length, refreshNativeTracks, status]);
 
   useEffect(() => {
+    if (!statusEvent) return;
     setBuffering(statusEvent.status === "loading");
     if (statusEvent.status === "readyToPlay") {
       setStatus("ready");
       setFailMessage(null);
-      refreshNativeTracks();
+      if (trackInspectTimerRef.current) clearTimeout(trackInspectTimerRef.current);
+      trackInspectTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) refreshNativeTracks();
+      }, 140);
       return;
     }
     if (statusEvent.status === "error") {
@@ -438,7 +565,12 @@ export function usePlaybackEngine(
   useEffect(() => {
     const t = timeEvent?.currentTime ?? positionRef.current;
     const b = Math.max(0, timeEvent?.bufferedPosition ?? 0);
-    const d = player.duration;
+    let d = 0;
+    try {
+      d = player.duration;
+    } catch {
+      d = durationRef.current;
+    }
     positionRef.current = t;
     bufferedRef.current = b;
     if (d > 0 && d !== durationRef.current) {
@@ -462,7 +594,7 @@ export function usePlaybackEngine(
 
     // Warm next episode stream + captions at 80% even when HUD is hidden
     if (!isTrailer && nextEpisode && d > 0 && t / d >= 0.8) {
-      prefetchStreams(subjectId, detailPath, nextEpisode.season, nextEpisode.episode);
+      prefetchStreams(activeSubjectId, activeDetailPath, nextEpisode.season, nextEpisode.episode);
     }
 
     // Trigger next-episode countdown at 95% even when HUD is hidden
@@ -482,8 +614,8 @@ export function usePlaybackEngine(
     if (!isTrailer && t > 0 && Math.abs(t - lastSavedRef.current) >= 10) {
       lastSavedRef.current = t;
       void saveProgress({
-        subject_id: subjectId,
-        detail_path: detailPath,
+        subject_id: activeSubjectId,
+        detail_path: activeDetailPath,
         media_type: mediaType,
         title,
         poster_url: posterUrl,
@@ -494,7 +626,7 @@ export function usePlaybackEngine(
         completed: d > 0 && t / d >= COMPLETION_THRESHOLD,
       });
     }
-  }, [timeEvent, player, activeTrack, cues, subtitleOffset, isTrailer, subjectId, detailPath, mediaType, title, posterUrl, season, episode, saveProgress, nextEpisode, prefs.autoPlayNext, onNavigateEpisode, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [timeEvent, player, activeTrack, cues, subtitleOffset, isTrailer, activeSubjectId, activeDetailPath, mediaType, title, posterUrl, season, episode, saveProgress, nextEpisode, prefs.autoPlayNext, onNavigateEpisode, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeTrack) {
@@ -506,8 +638,8 @@ export function usePlaybackEngine(
   useEffect(() => {
     if (isTrailer || !nextEpisode || duration <= 0) return;
     if (position / duration < 0.8) return;
-    prefetchStreams(subjectId, detailPath, nextEpisode.season, nextEpisode.episode);
-  }, [detailPath, duration, isTrailer, nextEpisode, position, subjectId]);
+    prefetchStreams(activeSubjectId, activeDetailPath, nextEpisode.season, nextEpisode.episode);
+  }, [activeDetailPath, activeSubjectId, duration, isTrailer, nextEpisode, position]);
 
   // Persist progress on exit
   const saveExitSnapshot = useCallback(() => {
@@ -516,8 +648,8 @@ export function usePlaybackEngine(
     const d = durationRef.current;
     if (t > 3) {
       void saveProgress({
-        subject_id: subjectId,
-        detail_path: detailPath,
+        subject_id: activeSubjectId,
+        detail_path: activeDetailPath,
         media_type: mediaType,
         title,
         poster_url: posterUrl,
@@ -528,7 +660,7 @@ export function usePlaybackEngine(
         completed: d > 0 && t / d >= COMPLETION_THRESHOLD,
       });
     }
-  }, [detailPath, episode, isTrailer, mediaType, posterUrl, saveProgress, season, subjectId, title]);
+  }, [activeDetailPath, activeSubjectId, episode, isTrailer, mediaType, posterUrl, saveProgress, season, title]);
 
   const saveExitRef = useRef(saveExitSnapshot);
   saveExitRef.current = saveExitSnapshot;
@@ -554,8 +686,8 @@ export function usePlaybackEngine(
   }, [pipActive, player]);
 
   const loadCaptions = useCallback(async () => {
-    if (isTrailer || tracks !== null || tracksLoading || !detailPath) return;
-    const warm = takePrefetchedCaptions(subjectId, detailPath, season, episode);
+    if (isTrailer || tracks !== null || tracksLoading || !activeDetailPath) return;
+    const warm = takePrefetchedCaptions(activeSubjectId, activeDetailPath, season, episode);
     if (warm) {
       setTracks(warm);
       return;
@@ -566,7 +698,7 @@ export function usePlaybackEngine(
     const controller = new AbortController();
     captionAbortRef.current = controller;
     try {
-      const list = await fetchCaptions(subjectId, detailPath, season, episode, controller.signal);
+      const list = await fetchCaptions(activeSubjectId, activeDetailPath, season, episode, controller.signal);
       if (!controller.signal.aborted) setTracks(list);
     } catch {
       if (!controller.signal.aborted) {
@@ -576,7 +708,7 @@ export function usePlaybackEngine(
     } finally {
       if (!controller.signal.aborted) setTracksLoading(false);
     }
-  }, [detailPath, episode, isTrailer, season, subjectId, tracks, tracksLoading]);
+  }, [activeDetailPath, activeSubjectId, episode, isTrailer, season, tracks, tracksLoading]);
 
   const selectTrack = useCallback(
     async (track: CaptionTrack | null) => {
@@ -692,8 +824,10 @@ export function usePlaybackEngine(
     (track: AudioTrack | null) => {
       manualAudioOverrideRef.current = true;
       try {
-        player.audioTrack = track;
-        setNativeAudioId(track?.id ?? null);
+        const rawAudio = player.availableAudioTracks ? Array.from(player.availableAudioTracks) : [];
+        const nativeMatch = track ? rawAudio.find((t) => t.id === track.id) ?? track : null;
+        player.audioTrack = nativeMatch;
+        setNativeAudioId(nativeMatch?.id ?? null);
       } catch {}
     },
     [player],
@@ -702,9 +836,11 @@ export function usePlaybackEngine(
   const pickNativeSubtitle = useCallback(
     (track: SubtitleTrack | null) => {
       try {
-        player.subtitleTrack = track;
-        setNativeSubtitleId(track?.id ?? null);
-        if (track) {
+        const rawSubs = player.availableSubtitleTracks ? Array.from(player.availableSubtitleTracks) : [];
+        const nativeMatch = track ? rawSubs.find((t) => t.id === track.id) ?? track : null;
+        player.subtitleTrack = nativeMatch;
+        setNativeSubtitleId(nativeMatch?.id ?? null);
+        if (nativeMatch) {
           setActiveTrack(null);
           setCues([]);
           setCurrentCue(null);
@@ -731,14 +867,14 @@ export function usePlaybackEngine(
       void applySource(current, at);
       return;
     }
-    if (!detailPath) {
+    if (!activeDetailPath) {
       showError("format", "No playable source is available.");
       return;
     }
     setStatus("loading");
     void (async () => {
       try {
-        const res = await resolveOriginalStreams(subjectId, detailPath, season, episode);
+        const res = await resolveOriginalStreams(activeSubjectId, activeDetailPath, season, episode);
         setAvailableSources(res.sources);
         const picked =
           (current?.resolution
@@ -750,7 +886,7 @@ export function usePlaybackEngine(
         showError(classifyPlayerError(err instanceof Error ? err.message : ""), null);
       }
     })();
-  }, [applySource, detailPath, episode, isTrailer, prefs.preferredQuality, season, showError, subjectId]);
+  }, [activeDetailPath, activeSubjectId, applySource, episode, isTrailer, prefs.preferredQuality, season, showError]);
 
   // Auto-play next episode countdown
   useEffect(() => {
@@ -814,6 +950,13 @@ export function usePlaybackEngine(
     nativeSubtitleTracks,
     nativeAudioId,
     nativeSubtitleId,
+    activeSubjectId,
+    activeDetailPath,
+    audioVersions,
+    audioVersionsLoading,
+    audioSwitchToast,
+    loadAudioVersions,
+    switchAudioVersion,
     country: effectiveCountry,
     nextCountdown,
     cancelAutoNext,

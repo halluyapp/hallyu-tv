@@ -10,7 +10,7 @@ import { palette, radius, spacing } from "@/design-system/tokens";
 import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { useStage } from "@/hooks/useStage";
 import { downloadManager } from "@/services/downloads/manager";
-import { resolveOriginalStreams } from "@/services/provider/adapter";
+import { fetchAudioVersions, resolveOriginalStreams, resolveStreams } from "@/services/provider/adapter";
 import {
   hydrateDetail,
   loadDetailCached,
@@ -19,7 +19,7 @@ import {
 import { prefetchStreams, takePrefetched } from "@/services/provider/prefetch";
 import { selectDownloadSource } from "@/services/provider/streams";
 import { COMPLETION_THRESHOLD, useLibrary } from "@/state/LibraryContext";
-import type { TitleDetail } from "@/types/provider";
+import type { AudioVersionOption, TitleDetail } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassLandscapeCard } from "@/ui/glass/GlassLandscapeCard";
@@ -94,14 +94,55 @@ export function TvDetailsScreen() {
     void loadTitleDetail();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const effectiveId = detail?.subjectId ?? subjectId;
-  const effectiveDetailPath = detail?.detailPath ?? detailPath;
+  const baseId = detail?.subjectId ?? subjectId;
+  const baseDetailPath = detail?.detailPath ?? detailPath;
   const effectiveTitle = detail?.title ?? initialTitle;
   const effectivePoster = detail?.posterUrl ?? initialPoster;
   const backdropUri = detail?.backdropUrl ?? effectivePoster;
   const isSeries = detail ? detail.mediaType === "series" && detail.seasons.length > 0 : false;
-  const saved = inWatchlist(effectiveId);
-  const latestResume = latestFor(effectiveId);
+
+  const [audioVersions, setAudioVersions] = useState<AudioVersionOption[]>(
+    () => detail?.audioVersions ?? [],
+  );
+  const [selectedAudioVersion, setSelectedAudioVersion] = useState<AudioVersionOption | null>(null);
+  const manualVersionRef = useRef(false);
+
+  useEffect(() => {
+    if (!detail) return;
+    if (detail.audioVersions && detail.audioVersions.length > 0) {
+      setAudioVersions(detail.audioVersions);
+      if (!manualVersionRef.current) {
+        const orig = detail.audioVersions.find((v) => v.isOriginal) ?? detail.audioVersions[0] ?? null;
+        setSelectedAudioVersion(orig);
+      }
+    }
+    let cancelled = false;
+    fetchAudioVersions({
+      subjectId: detail.subjectId,
+      detailPath: detail.detailPath,
+      title: detail.title,
+      mediaType: detail.mediaType,
+      country: detail.country,
+      existingVersions: detail.audioVersions,
+    })
+      .then((versions) => {
+        if (cancelled || versions.length === 0) return;
+        setAudioVersions(versions);
+        if (!manualVersionRef.current) {
+          const orig = versions.find((v) => v.isOriginal) ?? versions[0] ?? null;
+          setSelectedAudioVersion(orig);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [detail]);
+
+  const effectiveId = selectedAudioVersion?.subjectId ?? baseId;
+  const effectiveDetailPath = selectedAudioVersion?.detailPath ?? baseDetailPath;
+  const saved = inWatchlist(effectiveId) || inWatchlist(baseId);
+  const latestResume = latestFor(effectiveId) ?? latestFor(baseId);
 
   const currentSeasonObj = useMemo(
     () => detail?.seasons.find((s) => s.season === selectedSeason) ?? detail?.seasons[0] ?? null,
@@ -133,6 +174,7 @@ export function TvDetailsScreen() {
         title: effectiveTitle,
         posterUrl: effectivePoster,
         country: detail?.country ?? null,
+        audioVersions,
         mediaType: isSeries ? "series" : "movie",
         season: seasonNum,
         episode: episodeNum,
@@ -143,7 +185,7 @@ export function TvDetailsScreen() {
           isSeries && episodeNum < maxEp ? { season: seasonNum, episode: episodeNum + 1 } : null,
       });
     },
-    [detail?.country, detail?.seasons, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
+    [audioVersions, detail?.country, detail?.seasons, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
   );
 
   const handlePrimaryPlay = useCallback(() => {
@@ -196,7 +238,9 @@ export function TvDetailsScreen() {
     const ep = isSeries ? (latestResume?.episode_number ?? 1) : 0;
     setDownloadToast("Resolving progressive MP4 download…");
     try {
-      const res = await resolveOriginalStreams(effectiveId, effectiveDetailPath, se, ep);
+      const res = manualVersionRef.current
+        ? await resolveStreams(effectiveId, effectiveDetailPath, se, ep)
+        : await resolveOriginalStreams(effectiveId, effectiveDetailPath, se, ep);
       const mp4 =
         selectDownloadSource(res.sources, "720p") ?? selectDownloadSource(res.sources, null);
       if (!mp4) {
@@ -441,6 +485,31 @@ export function TvDetailsScreen() {
           </View>
 
           {downloadToast ? <Text style={styles.toastText}>{downloadToast}</Text> : null}
+
+          {audioVersions.length > 1 ? (
+            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10, marginTop: 6 }}>
+              <Text style={{ color: palette.textSecondary, fontSize: 13, fontWeight: "700", letterSpacing: 0.4 }}>
+                AUDIO:
+              </Text>
+              {audioVersions.map((ver) => {
+                const active = ver.subjectId === effectiveId;
+                return (
+                  <GlassPillButton
+                    key={ver.subjectId}
+                    label={ver.label}
+                    size="sm"
+                    variant={active ? "pearl" : "secondary"}
+                    active={active}
+                    onPress={() => {
+                      manualVersionRef.current = true;
+                      setSelectedAudioVersion(ver);
+                      setDownloadToast(`Audio set to ${ver.label}`);
+                    }}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
         </View>
 
         {/* Horizontal Season Capsules + 16:9 Frosted Liquid Glass Episode Cards */}

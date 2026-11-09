@@ -314,6 +314,25 @@ export function MobilePlayerScreen() {
         </View>
       ) : null}
 
+      {/* Audio Switch Feedback Pill */}
+      {engine.audioSwitchToast ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: Math.max(18, insets.top + 10),
+            alignSelf: "center",
+            zIndex: 40,
+          }}
+        >
+          <LiquidGlassView variant="dock" borderRadius={radius.pill} contentStyle={{ paddingHorizontal: 16, paddingVertical: 8 }}>
+            <Text style={{ color: "#FFFFFF", fontSize: 12.5, fontWeight: "700" }}>
+              {engine.audioSwitchToast}
+            </Text>
+          </LiquidGlassView>
+        </View>
+      ) : null}
+
       {/* Next Episode Countdown Pill */}
       {engine.nextCountdown !== null && params.nextEpisode && engine.status !== "error" ? (
         <View style={[styles.nextWrap, { bottom: controlsVisible ? 124 : 26, right: Math.max(20, insets.right + 14) }]}>
@@ -504,12 +523,13 @@ export function MobilePlayerScreen() {
                     }}
                   />
                 ) : null}
-                {!params.isTrailer && engine.nativeAudioTracks.length > 1 ? (
+                {!params.isTrailer && (!engine.offline || engine.nativeAudioTracks.length > 1) ? (
                   <CompactControlPill
                     icon={<Volume2 size={15} color="#FFFFFF" />}
                     label="Audio"
                     onPress={() => {
                       engine.refreshNativeTracks();
+                      void engine.loadAudioVersions();
                       setSheet("audio");
                     }}
                   />
@@ -635,18 +655,59 @@ export function MobilePlayerScreen() {
 
         {sheet === "audio" ? (
           <ScrollView contentContainerStyle={styles.sheetStack}>
-            {engine.nativeAudioTracks.map((track, idx) => (
-              <GlassPillButton
-                key={track.id}
-                label={formatAudioTrackLabel(track, idx, engine.country)}
-                size="sm"
-                variant={engine.nativeAudioId === track.id ? "primary" : "secondary"}
-                onPress={() => {
-                  engine.pickNativeAudio(track);
-                  setSheet(null);
-                }}
-              />
-            ))}
+            {!engine.offline ? (
+              <>
+                <Text style={styles.sheetSubLabel}>Stream Audio Version</Text>
+                {engine.audioVersionsLoading && engine.audioVersions.length <= 1 ? (
+                  <View style={{ paddingVertical: 8, alignItems: "center", gap: 6 }}>
+                    <ActivityIndicator color={palette.accent} />
+                    <Text style={styles.sheetSubLabel}>Finding Original Audio & language versions…</Text>
+                  </View>
+                ) : null}
+                {engine.audioVersions.map((ver) => {
+                  const active = ver.subjectId === engine.activeSubjectId;
+                  return (
+                    <GlassPillButton
+                      key={ver.subjectId}
+                      label={ver.label}
+                      size="sm"
+                      variant={active ? "primary" : ver.isOriginal ? "pearl" : "secondary"}
+                      active={active}
+                      onPress={() => {
+                        setSheet(null);
+                        void engine.switchAudioVersion(ver);
+                      }}
+                    />
+                  );
+                })}
+              </>
+            ) : null}
+
+            {engine.nativeAudioTracks.length > 1 ? (
+              <>
+                <Text style={[styles.sheetSubLabel, { marginTop: 6 }]}>Container Audio Tracks</Text>
+                {engine.nativeAudioTracks.map((track, idx) => (
+                  <GlassPillButton
+                    key={track.id}
+                    label={formatAudioTrackLabel(track, idx, engine.country)}
+                    size="sm"
+                    variant={engine.nativeAudioId === track.id ? "primary" : "secondary"}
+                    onPress={() => {
+                      engine.pickNativeAudio(track);
+                      setSheet(null);
+                    }}
+                  />
+                ))}
+              </>
+            ) : null}
+
+            {!engine.audioVersionsLoading &&
+            engine.audioVersions.length <= 1 &&
+            engine.nativeAudioTracks.length <= 1 ? (
+              <Text style={styles.sheetSubLabel}>
+                Playing the primary Original Audio stream available from the provider.
+              </Text>
+            ) : null}
           </ScrollView>
         ) : null}
 

@@ -25,7 +25,7 @@ interface PosterProps {
  * 1. Sends Moviebox CDN `Referer` + `User-Agent` headers so requests are never throttled.
  * 2. Requests right-sized WebP thumbnails (~20 KB instead of 2 MB raw posters).
  * 3. Automatically retries the raw original URL if a CDN ever rejects resize params.
- * 4. Uses `allowDownscaling` + `decodeFormat="rgb"` (50% less bitmap RAM, 2x faster decode).
+ * 4. Uses `allowDownscaling` + `memory-disk` cache for smooth 60fps scrolling.
  */
 export const Poster = memo(function Poster({
   uri,
@@ -59,7 +59,6 @@ export const Poster = memo(function Poster({
       contentFit="cover"
       cachePolicy="memory-disk"
       allowDownscaling
-      decodeFormat="rgb"
       priority={priority}
       recyclingKey={effectiveUri ?? undefined}
       transition={profile.imageTransitionMs}

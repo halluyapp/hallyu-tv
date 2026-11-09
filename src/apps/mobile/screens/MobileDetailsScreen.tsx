@@ -31,7 +31,7 @@ import { usePerformanceProfile } from "@/hooks/useDeviceTier";
 import { downloadManager } from "@/services/downloads/manager";
 import { downloadKey } from "@/services/downloads/reasons";
 import type { DownloadJob } from "@/services/downloads/types";
-import { resolveOriginalStreams } from "@/services/provider/adapter";
+import { fetchAudioVersions, resolveOriginalStreams, resolveStreams } from "@/services/provider/adapter";
 import {
   hydrateDetail,
   loadDetailCached,
@@ -41,7 +41,7 @@ import { prefetchStreams, takePrefetched } from "@/services/provider/prefetch";
 import { selectDownloadSource } from "@/services/provider/streams";
 import { useSound } from "@/services/sound/SoundContext";
 import { COMPLETION_THRESHOLD, useLibrary } from "@/state/LibraryContext";
-import type { TitleDetail } from "@/types/provider";
+import type { AudioVersionOption, TitleDetail } from "@/types/provider";
 import { AmbientArtworkCanvas } from "@/ui/glass/AmbientArtworkCanvas";
 import { GlassIconButton, GlassPillButton } from "@/ui/glass/GlassButton";
 import { GlassProgressBar } from "@/ui/glass/GlassLandscapeCard";
@@ -136,14 +136,55 @@ export function MobileDetailsScreen() {
     void loadDetail();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const effectiveId = detail?.subjectId ?? subjectId;
-  const effectiveDetailPath = detail?.detailPath ?? detailPath;
+  const baseId = detail?.subjectId ?? subjectId;
+  const baseDetailPath = detail?.detailPath ?? detailPath;
   const effectiveTitle = detail?.title ?? initialTitle;
   const effectivePoster = detail?.posterUrl ?? initialPoster;
   const heroArt = effectivePoster ?? detail?.backdropUrl ?? null;
   const isSeries = detail ? detail.mediaType === "series" && detail.seasons.length > 0 : false;
-  const saved = inWatchlist(effectiveId);
-  const latestResume = latestFor(effectiveId);
+
+  const [audioVersions, setAudioVersions] = useState<AudioVersionOption[]>(
+    () => detail?.audioVersions ?? [],
+  );
+  const [selectedAudioVersion, setSelectedAudioVersion] = useState<AudioVersionOption | null>(null);
+  const manualVersionRef = React.useRef(false);
+
+  useEffect(() => {
+    if (!detail) return;
+    if (detail.audioVersions && detail.audioVersions.length > 0) {
+      setAudioVersions(detail.audioVersions);
+      if (!manualVersionRef.current) {
+        const orig = detail.audioVersions.find((v) => v.isOriginal) ?? detail.audioVersions[0] ?? null;
+        setSelectedAudioVersion(orig);
+      }
+    }
+    let cancelled = false;
+    fetchAudioVersions({
+      subjectId: detail.subjectId,
+      detailPath: detail.detailPath,
+      title: detail.title,
+      mediaType: detail.mediaType,
+      country: detail.country,
+      existingVersions: detail.audioVersions,
+    })
+      .then((versions) => {
+        if (cancelled || versions.length === 0) return;
+        setAudioVersions(versions);
+        if (!manualVersionRef.current) {
+          const orig = versions.find((v) => v.isOriginal) ?? versions[0] ?? null;
+          setSelectedAudioVersion(orig);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [detail]);
+
+  const effectiveId = selectedAudioVersion?.subjectId ?? baseId;
+  const effectiveDetailPath = selectedAudioVersion?.detailPath ?? baseDetailPath;
+  const saved = inWatchlist(effectiveId) || inWatchlist(baseId);
+  const latestResume = latestFor(effectiveId) ?? latestFor(baseId);
 
   const currentSeasonObj = useMemo(
     () => detail?.seasons.find((s) => s.season === selectedSeason) ?? detail?.seasons[0] ?? null,
@@ -183,6 +224,7 @@ export function MobileDetailsScreen() {
         title: effectiveTitle,
         posterUrl: effectivePoster,
         country: detail?.country ?? null,
+        audioVersions,
         mediaType: isSeries ? "series" : "movie",
         season: se,
         episode: ep,
@@ -192,7 +234,7 @@ export function MobileDetailsScreen() {
         nextEpisode: isSeries && ep < maxEp ? { season: se, episode: ep + 1 } : null,
       });
     },
-    [detail?.country, detail?.seasons, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
+    [audioVersions, detail?.country, detail?.seasons, effectiveDetailPath, effectiveId, effectivePoster, effectiveTitle, isSeries, navigation],
   );
 
   const handlePrimaryPlay = useCallback(() => {
@@ -211,7 +253,9 @@ export function MobileDetailsScreen() {
     async (se: number, ep: number) => {
       setToast("Resolving progressive MP4…");
       try {
-        const res = await resolveOriginalStreams(effectiveId, effectiveDetailPath, se, ep);
+        const res = manualVersionRef.current
+          ? await resolveStreams(effectiveId, effectiveDetailPath, se, ep)
+          : await resolveOriginalStreams(effectiveId, effectiveDetailPath, se, ep);
         const mp4 = selectDownloadSource(res.sources, null);
         if (!mp4) {
           setToast("No progressive MP4 available for offline saving.");
@@ -510,6 +554,33 @@ export function MobileDetailsScreen() {
               </View>
 
               {toast ? <Text style={styles.toastText}>{toast}</Text> : null}
+
+              {audioVersions.length > 1 ? (
+                <View style={{ gap: 8 }}>
+                  <Text style={{ color: palette.textSecondary, fontSize: 12, fontWeight: "700", letterSpacing: 0.4 }}>
+                    AUDIO VERSION
+                  </Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {audioVersions.map((ver) => {
+                      const active = ver.subjectId === effectiveId;
+                      return (
+                        <GlassPillButton
+                          key={ver.subjectId}
+                          label={ver.label}
+                          size="sm"
+                          variant={active ? "pearl" : "secondary"}
+                          active={active}
+                          onPress={() => {
+                            manualVersionRef.current = true;
+                            setSelectedAudioVersion(ver);
+                            setToast(`Selected ${ver.label}`);
+                          }}
+                        />
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              ) : null}
 
               {detail?.description ? (
                 <Pressable onPress={() => setSynopsisExpanded((v) => !v)}>
