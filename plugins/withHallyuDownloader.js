@@ -307,7 +307,16 @@ function patchReleaseSigning(androidProjectRoot) {
 `;
   if (!src.includes(signingAnchor)) throw new Error("withHallyuDownloader: could not locate Android signingConfigs");
   src = src.replace(signingAnchor, releaseSigning);
-  src = src.replace(/release\s*\{([\s\S]*?)signingConfig signingConfigs\.debug([\s\S]*?)\}/, (block) => block.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.release"));
+  // Use release signing only when CI provides keystore secrets; otherwise fall
+  // back to debug signing so PRs and regular pushes can still build APKs.
+  src = src.replace(
+    /release\s*\{([\s\S]*?)signingConfig signingConfigs\.debug([\s\S]*?)\}/,
+    (block) =>
+      block.replace(
+        "signingConfig signingConfigs.debug",
+        "signingConfig System.getenv('ANDROID_KEYSTORE_PATH') ? signingConfigs.release : signingConfigs.debug",
+      ),
+  );
   fs.writeFileSync(gradlePath, src, "utf8");
 }
 
