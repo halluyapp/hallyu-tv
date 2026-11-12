@@ -263,13 +263,21 @@ export function selectSource(sources: NormalizedSource[], requested?: string | n
   return pickFrom(selectableSources(sources), requested);
 }
 
-/** Downloads require progressive MP4. An explicit requested quality that is not
- * downloadable returns null instead of silently substituting another source;
- * callers can fall back to the default download rule with no requested quality. */
+/** Downloads require progressive MP4. Defaults to the lowest available quality
+ * to minimise mobile data usage. An explicit requested quality that is not
+ * downloadable returns null instead of silently substituting another source. */
 export function selectDownloadSource(sources: NormalizedSource[], requested?: string | null): NormalizedSource | null {
-  const candidates = downloadableSources(sources);
-  if (requested) return candidates.find((s) => s.resolution === requested) ?? null;
-  return pickFrom(candidates, null);
+  const candidates = sources.filter((s) => !s.preview && isDownloadableSource(s));
+  if (requested) {
+    const match = candidates.find((s) => s.resolution === requested);
+    if (match) return match;
+    return null;
+  }
+  // Lowest quality first = least mobile data per download.
+  const byQuality = [...candidates].sort(
+    (a, b) => (a.qualityValue ?? 0) - (b.qualityValue ?? 0),
+  );
+  return byQuality[0] ?? null;
 }
 
 /** Fresh-link recovery: same quality on an untried URL first, then default rule. */

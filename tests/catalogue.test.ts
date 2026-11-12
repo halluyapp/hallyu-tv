@@ -14,6 +14,7 @@ import {
   isBlockedItem,
   isChinese,
   isDubbedItem,
+  isHindiItem,
   isKorean,
   isOriginalAudio,
   matchesWorld,
@@ -35,14 +36,14 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-/** A `/home` item, exactly as the live provider returns it. */
+/** A `/home` item, exactly as the live provider returns it. Defaults to non-Hindi. */
 function homeRaw(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    name: "Love [Hindi]",
+    name: "Love",
     poster_url: "https://cdn.example.com/love.jpg",
-    slug: "love-hindi-ex58XnwT1m5",
+    slug: "love-ex58XnwT1m5",
     subject_id: "1001",
-    badge: "Hindi",
+    badge: null,
     rating: "7.0",
     year: "2026",
     genre: "Drama,Romance",
@@ -51,7 +52,7 @@ function homeRaw(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-/** A `/search` item, with the richer metadata that endpoint returns. */
+/** A `/search` item, with the richer metadata that endpoint returns. Defaults to non-Hindi. */
 function searchRaw(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     ...homeRaw(),
@@ -182,7 +183,7 @@ describe("content worlds and classification", () => {
     expect(providerWorldFor("Top Anime Series")?.key).toBe("anime");
     expect(providerWorldFor("🔥Hot Short TV")?.key).toBe("shorts");
     expect(providerWorldFor("Best Asian Dramas")?.key).toBe("asian-dramas");
-    expect(providerWorldFor("Bollywood")?.key).toBe("bollywood");
+    expect(providerWorldFor("Bollywood")).toBeNull();
     expect(providerWorldFor("Something Else")).toBeNull();
   });
 
@@ -206,10 +207,10 @@ describe("content worlds and classification", () => {
   });
 
   test("section membership keeps provider worlds intact", () => {
-    const bollywood = item({ country: "India", type: "movie", language: "Hindi" });
-    const membership = { [bollywood.subjectId]: ["bollywood"] };
-    expect(matchesWorld(bollywood, "bollywood", membership)).toBe(true);
-    expect(matchesWorld(item({ country: "France", slug: "f-1", subject_id: "9" }), "bollywood", {})).toBe(false);
+    const hindiFilm = item({ country: "India", type: "movie", language: "Hindi" });
+    // Hindi items are blocked site-wide, so they never match a browse world.
+    expect(matchesWorld(hindiFilm, "hollywood", {})).toBe(false);
+    expect(matchesWorld(item({ country: "France", slug: "f-1", subject_id: "9" }), "hollywood", {})).toBe(false);
   });
 
   test("combined filters intersect instead of replacing each other", () => {
@@ -238,21 +239,21 @@ describe("catalogue snapshot", () => {
   const sections: HomeSection[] = [
     {
       section: "Featured",
-      items: [item({ subject_id: "f1", slug: "f1", badge: "Hindi", dub: true, country: "India" })],
+      items: [item({ subject_id: "f1", slug: "f1", badge: null, dub: false, country: "Japan" })],
     },
     {
       section: "Trending Now",
       items: [
-        item({ subject_id: "t1", slug: "t1", badge: "Hindi", dub: true, country: "India", rating: "9.0" }),
-        item({ subject_id: "t2", slug: "t2", badge: "Hindi", dub: true, country: "India" }),
+        item({ subject_id: "t1", slug: "t1", badge: null, dub: false, country: "Korea", rating: "9.0" }),
+        item({ subject_id: "t2", slug: "t2", badge: null, dub: false, country: "China" }),
       ],
     },
     {
-      section: "Bollywood",
+      section: "Hollywood",
       items: [
-        item({ subject_id: "b1", slug: "b1", badge: "Hindi", dub: true, country: "India", type: "movie" }),
-        item({ subject_id: "b2", slug: "b2", badge: "Hindi", dub: true, country: "India", type: "movie" }),
-        item({ subject_id: "b3", slug: "b3", badge: "Hindi", dub: true, country: "India", type: "movie" }),
+        item({ subject_id: "h1", slug: "h1", badge: null, dub: false, country: "United States", type: "movie" }),
+        item({ subject_id: "h2", slug: "h2", badge: null, dub: false, country: "United Kingdom", type: "movie" }),
+        item({ subject_id: "h3", slug: "h3", badge: null, dub: false, country: "Canada", type: "movie" }),
       ],
     },
     {
@@ -281,35 +282,41 @@ describe("catalogue snapshot", () => {
     expect(titles).toContain("Trending Now");
     expect(titles).toContain("K-Drama");
     expect(titles).toContain("C-Drama");
-    expect(titles).toContain("Bollywood");
+    expect(titles).toContain("Hollywood");
+    expect(titles).not.toContain("Bollywood");
   });
 
   test("trending preserves provider ranking order", () => {
     const snapshot = buildSnapshot({ sections, harvest, at: 1 });
     const trending = snapshot.shelves.find((shelf) => shelf.key === "trending");
-    expect(trending?.items[0]?.subjectId).toBe("t1");
+    expect(trending?.items.map((entry) => entry.subjectId)).toEqual(["t1", "t2"]);
   });
 
   test("K-Drama only contains metadata-verified Korean series", () => {
     const snapshot = buildSnapshot({ sections, harvest, at: 1 });
     const kdrama = snapshot.shelves.find((shelf) => shelf.title === "K-Drama");
-    expect(kdrama?.items.map((entry) => entry.subjectId)).toEqual(["k1", "k2", "k3"]);
+    expect(kdrama?.items.map((entry) => entry.subjectId).sort()).toEqual(["k1", "k2", "k3", "t1"].sort());
+    expect(kdrama?.items.every((entry) => entry.country === "Korea")).toBe(true);
   });
 
-  test("dub-only provider worlds are labelled honestly", () => {
+  test("no Hindi dub shelves appear anywhere", () => {
     const snapshot = buildSnapshot({ sections, harvest, at: 1 });
-    const bollywood = snapshot.shelves.find((shelf) => shelf.key === "section-bollywood");
-    expect(bollywood?.subtitle).toBe("Hindi dub");
+    const titles = snapshot.shelves.map((shelf) => shelf.title.toLowerCase());
+    expect(titles).not.toContain("bollywood");
+    expect(titles).not.toContain("hindi dub");
+    expect(snapshot.shelves.find((shelf) => shelf.key === "section-bollywood")).toBeUndefined();
     const kdrama = snapshot.shelves.find((shelf) => shelf.title === "K-Drama");
     expect(kdrama?.subtitle).toBeNull();
-    // A derived world and a provider section with the same name must not both render.
-    const titles = snapshot.shelves.map((shelf) => shelf.title.toLowerCase());
+    // No duplicate titles.
     expect(new Set(titles).size).toBe(titles.length);
   });
 
   test("hero prefers original-language titles over the dub banner", () => {
     const snapshot = buildSnapshot({ sections, harvest, at: 1 });
-    expect(snapshot.hero[0]?.subjectId.startsWith("k") || snapshot.hero[0]?.subjectId === "c1").toBe(true);
+    expect(snapshot.hero.length).toBeGreaterThan(0);
+    expect(snapshot.hero[0]?.country).not.toBeNull();
+    expect(snapshot.hero[0]?.subjectId).not.toMatch(/-hindi(-|$)/i);
+    expect(isHindiItem(snapshot.hero[0]!)).toBe(false);
   });
 
   test("reports metadata coverage and classification counts", () => {
@@ -317,7 +324,7 @@ describe("catalogue snapshot", () => {
     expect(snapshot.stats.items).toBe(snapshot.index.length);
     expect(snapshot.stats.withCountry).toBeGreaterThan(0);
     expect(snapshot.stats.withGenre).toBeGreaterThan(0);
-    expect(snapshot.stats.dubbed).toBeGreaterThan(0);
+    expect(snapshot.stats.dubbed).toBe(0);
     expect(snapshot.genres).toContain("Drama");
   });
 

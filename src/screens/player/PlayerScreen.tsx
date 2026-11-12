@@ -75,6 +75,11 @@ export function PlayerScreen() {
       return false;
     }
   });
+  const [brightness, setBrightness] = useState(1);
+  const [volume, setVolume] = useState(1);
+  const [gestureMode, setGestureMode] = useState<"brightness" | "volume" | "seek" | null>(null);
+  const [brightnessHint, setBrightnessHint] = useState<string | null>(null);
+  const [volumeHint, setVolumeHint] = useState<string | null>(null);
 
   useKeepAwake();
 
@@ -264,6 +269,16 @@ export function PlayerScreen() {
     setCurrentCue(null);
     setTracksError(null);
     setPosition(resumeAt);
+    setBrightness(1);
+    setVolume(1);
+    setGestureMode(null);
+    setBrightnessHint(null);
+    setVolumeHint(null);
+    try {
+      player.volume = 1;
+    } catch {
+      // Volume reset is best-effort.
+    }
     const next = selectSource(sources, null);
     if (next) void applySource(next, resumeAt);
     else showError("format", "No playable source was returned for this episode.");
@@ -589,6 +604,52 @@ export function PlayerScreen() {
             }, 420);
           }
         },
+        onPanResponderMove: (_event, state) => {
+          // Long-press 2× takes priority: don't start other gestures while holding.
+          if (longPressActiveRef.current || longPressTimerRef.current) return;
+
+          const absDx = Math.abs(state.dx);
+          const absDy = Math.abs(state.dy);
+
+          // Decide the gesture mode on the first meaningful move.
+          if (!gestureMode) {
+            if (absDy > absDx && absDy > 12) {
+              // Vertical drag: brightness on left, volume on right.
+              setGestureMode(pressZoneRef.current === "left" ? "brightness" : "volume");
+            } else if (absDx > absDy && absDx > 12) {
+              setGestureMode("seek");
+            }
+          }
+
+          if (gestureMode === "brightness") {
+            // Drag up to brighten, down to dim.
+            const delta = -(state.dy / Math.max(stage.height, 1));
+            const next = Math.min(1, Math.max(0, brightness + delta));
+            setBrightness(next);
+            const pct = Math.round(next * 100);
+            setBrightnessHint(`Brightness ${pct}%`);
+            showControls();
+            setTimeout(() => setBrightnessHint(null), 900);
+            return;
+          }
+
+          if (gestureMode === "volume") {
+            // Drag up to raise volume, down to lower.
+            const delta = -(state.dy / Math.max(stage.height, 1));
+            const next = Math.min(1, Math.max(0, volume + delta));
+            setVolume(next);
+            try {
+              player.volume = next;
+            } catch {
+              // Volume control is best-effort on some platforms.
+            }
+            const pct = Math.round(next * 100);
+            setVolumeHint(`Volume ${pct}%`);
+            showControls();
+            setTimeout(() => setVolumeHint(null), 900);
+            return;
+          }
+        },
         onPanResponderRelease: (_event, state) => {
           if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
           if (longPressActiveRef.current) {
@@ -596,8 +657,22 @@ export function PlayerScreen() {
             player.playbackRate = holdRateRef.current;
             setRate(holdRateRef.current);
             setGestureHint(null);
+            setGestureMode(null);
             return;
           }
+
+          if (gestureMode === "brightness") {
+            setGestureMode(null);
+            setBrightnessHint(null);
+            return;
+          }
+
+          if (gestureMode === "volume") {
+            setGestureMode(null);
+            setVolumeHint(null);
+            return;
+          }
+
           if (Math.abs(state.dx) > 54 && Math.abs(state.dx) > Math.abs(state.dy) * 1.3) {
             const seekBy = Math.round((state.dx / Math.max(stage.width, 1)) * Math.min(Math.max(duration, 90), 300));
             const target = Math.max(0, Math.min(duration || Number.MAX_SAFE_INTEGER, gestureStartRef.current.position + seekBy));
@@ -607,8 +682,12 @@ export function PlayerScreen() {
             setGestureHint(`${seekBy >= 0 ? "+" : "−"}${Math.abs(seekBy)} seconds`);
             showControls();
             setTimeout(() => setGestureHint(null), 900);
+            setGestureMode(null);
             return;
           }
+
+          setGestureMode(null);
+
           if (Math.abs(state.dx) > 12 || Math.abs(state.dy) > 12) return;
 
           // Use the zone captured on touch-down: release coordinates are unreliable on Android.
@@ -649,9 +728,12 @@ export function PlayerScreen() {
             player.playbackRate = holdRateRef.current;
             setRate(holdRateRef.current);
           }
+          setGestureMode(null);
+          setBrightnessHint(null);
+          setVolumeHint(null);
         },
       }),
-    [player, skip, stage.width, togglePlay, showControls],
+    [player, skip, stage.width, stage.height, togglePlay, showControls, brightness, volume, gestureMode],
   );
 
   const setPlaybackRate = useCallback(
@@ -803,6 +885,14 @@ export function PlayerScreen() {
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.cinemaShade]} />
       ) : null}
 
+      {/* Brightness dim overlay (left-side vertical drag) */}
+      {brightness < 1 && !pipActive ? (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(0,0,0,${1 - brightness})` }]}
+        />
+      ) : null}
+
       {activeTrack && currentCue ? (
         <View
           style={[styles.subtitleOverlay, { bottom: controlsVisible ? stage.subtitleSize * 5.4 : stage.subtitleSize * 2.4 }]}
@@ -815,6 +905,16 @@ export function PlayerScreen() {
       {gestureHint ? (
         <View style={styles.gestureHint} pointerEvents="none">
           <Text style={styles.gestureHintText}>{gestureHint}</Text>
+        </View>
+      ) : null}
+      {brightnessHint ? (
+        <View style={styles.gestureHint} pointerEvents="none">
+          <Text style={styles.gestureHintText}>{brightnessHint}</Text>
+        </View>
+      ) : null}
+      {volumeHint ? (
+        <View style={styles.gestureHint} pointerEvents="none">
+          <Text style={styles.gestureHintText}>{volumeHint}</Text>
         </View>
       ) : null}
 

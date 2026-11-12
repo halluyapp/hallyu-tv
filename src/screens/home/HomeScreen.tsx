@@ -30,11 +30,9 @@ const QUICK_WORLDS: WorldKey[] = [
   "cdrama",
   "anime",
   "hollywood",
-  "bollywood",
   "asian-dramas",
   "movies",
   "series",
-  "dubbed",
 ];
 
 const SHELF_TARGETS: Record<string, { world: WorldKey; genre: string | null }> = {

@@ -1,5 +1,6 @@
 import { hydrateCache, writeCache } from "@/services/cache/swr";
 import { fetchHomeCatalogue, searchCatalogue, type SearchPage } from "@/services/provider/adapter";
+import { ProviderError } from "@/types/provider";
 import type { CatalogueItem, HomeSection } from "@/types/provider";
 import { emptyReport, type NormalizeReport } from "./normalize";
 import { harvestCatalogue } from "./harvest";
@@ -98,9 +99,6 @@ const PROVIDER_SHELF_KEYS = new Set([
   // "anime" is a fallback: the derived world wins when it has enough titles,
   // but a thin harvest must not hide the provider's own anime rail.
   "anime",
-  "bollywood",
-  "south-indian",
-  "indian-dramas",
   "asian-dramas",
   "western-tv",
   "cinema",
@@ -153,7 +151,7 @@ function dubSubtitle(items: CatalogueItem[]): string | null {
   const languages = new Set(
     items
       .map((item) => (item.badge ?? "").trim())
-      .filter((badge) => badge.length > 0 && /hindi|punjabi|tamil|telugu/i.test(badge)),
+      .filter((badge) => badge.length > 0 && /punjabi|tamil|telugu/i.test(badge)),
   );
   if (languages.size === 1) return `${Array.from(languages)[0]} dub`;
   return "Dubbed";
@@ -236,7 +234,7 @@ export function buildSnapshot(input: SnapshotInput): CatalogueSnapshot {
     shelf(
       "hollywood",
       "Hollywood",
-      take(byWorld("hollywood").filter((item) => isOriginalAudio(item)).concat(byWorld("hollywood"))),
+      take(uniqueItems(byWorld("hollywood").filter((item) => isOriginalAudio(item)).concat(byWorld("hollywood")))),
       "derived",
     ),
   );
@@ -411,25 +409,39 @@ export function loadCatalogue(): Promise<CatalogueSnapshot> {
 }
 
 async function loadCatalogueOnce(): Promise<CatalogueSnapshot> {
-  const [home, harvest] = await Promise.allSettled([fetchHomeCatalogue(), harvestCatalogue()]);
-
-  if (home.status === "rejected") {
+  let home;
+  try {
+    home = await fetchHomeCatalogue();
+  } catch {
     const cached = await hydrateCatalogue();
     if (cached) return cached;
-    throw home.reason;
+    throw new ProviderError("unavailable", "Could not reach the catalogue. Check your connection.");
   }
 
-  const harvestResult = harvest.status === "fulfilled" ? harvest.value : { items: [], requests: 0, failures: 1 };
+  // Paint immediately from home sections only. Harvest runs in the background
+  // so the cold start isn't blocked by up to 10 extra search requests.
   const snapshot = buildSnapshot({
-    sections: home.value.sections,
-    harvest: harvestResult.items,
-    report: home.value.report,
-    rawSections: home.value.rawSections,
-    mergedSections: home.value.mergedSections,
-    harvestRequests: harvestResult.requests,
-    harvestFailures: harvestResult.failures,
+    sections: home.sections,
+    harvest: [],
+    report: home.report,
+    rawSections: home.rawSections,
+    mergedSections: home.mergedSections,
   });
   writeCache(CACHE_KEY, snapshot);
+
+  void harvestCatalogue().then(async (harvestResult) => {
+    const enriched = buildSnapshot({
+      sections: home.sections,
+      harvest: harvestResult.items,
+      report: home.report,
+      rawSections: home.rawSections,
+      mergedSections: home.mergedSections,
+      harvestRequests: harvestResult.requests,
+      harvestFailures: harvestResult.failures,
+    });
+    writeCache(CACHE_KEY, enriched);
+  });
+
   return snapshot;
 }
 
@@ -453,12 +465,16 @@ export function browseCatalogue(
   };
 }
 
-/** Title search for the catalogue; filters are applied to the returned page. */
+/** Title search for the catalogue; Hindi/blocked items are filtered out. */
 export async function searchTitles(
   query: string,
   page = 1,
   signal?: AbortSignal,
   perPage = 30,
 ): Promise<SearchPage> {
-  return searchCatalogue(query, page, signal, perPage);
+  const result = await searchCatalogue(query, page, signal, perPage);
+  return {
+    ...result,
+    items: result.items.filter((item) => !isBlockedItem(item)),
+  };
 }
