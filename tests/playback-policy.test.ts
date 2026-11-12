@@ -49,9 +49,9 @@ describe("adaptive ladder", () => {
     expect(pickAdaptiveSource(ladder, "720p", 1)?.resolution).toBe("480p");
   });
 
-  test("never drops below 480p while a higher rung exists", () => {
-    expect(pickAdaptiveSource(ladder, "720p", 3)?.resolution).toBe("480p");
-    expect(pickAdaptiveSource(ladder, "480p", 2)?.resolution).toBe("480p");
+  test("never drops below 360p while a higher rung exists", () => {
+    expect(pickAdaptiveSource(ladder, "720p", 3)?.resolution).toBe("360p");
+    expect(pickAdaptiveSource(ladder, "480p", 2)?.resolution).toBe("360p");
   });
 
   test("falls back to the top of the ladder without a current resolution", () => {

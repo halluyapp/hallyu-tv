@@ -329,8 +329,16 @@ class DownloadManager {
 
   pause(id: string) {
     const job = this.jobs.get(id);
-    if (!job || job.engine === "native") return;
+    if (!job) return;
     if (job.state !== "downloading") return;
+
+    if (job.engine === "native") {
+      void nativeDownloader.pause(job.nativeKey ?? id).catch(() => {
+        this.update(id, { state: "paused" });
+      });
+      this.update(id, { state: "paused" });
+      return;
+    }
     this.tasks.get(id)?.pause();
     this.update(id, { state: "paused" });
   }

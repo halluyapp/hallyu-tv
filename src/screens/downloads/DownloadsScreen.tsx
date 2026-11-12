@@ -251,11 +251,21 @@ export function DownloadsScreen() {
         ) : null}
 
         {compact ? null : (
-          <Poster
-            uri={job.posterUrl}
-            style={[styles.poster, { width: posterW, height: posterH, borderRadius: radius.sm }]}
-            initials={initialsFor(job.title)}
-          />
+          <Pressable
+            onPress={() => {
+              if (!selecting) playOffline(job);
+            }}
+            style={styles.posterPressable}
+            hitSlop={10}
+          >
+            <Poster
+              uri={job.posterUrl}
+              style={[styles.poster, { width: posterW, height: posterH, borderRadius: radius.sm }]}
+              initials={initialsFor(job.title)}
+              play
+              playColor="#FFFFFF"
+            />
+          </Pressable>
         )}
 
         <View style={{ flex: 1, gap: 4 }}>
@@ -310,7 +320,7 @@ export function DownloadsScreen() {
               </Pressable>
             ) : null}
 
-            {job.state === "downloading" && job.engine !== "native" && !selecting ? (
+            {job.state === "downloading" && !selecting ? (
               <Pressable style={styles.chipAction} onPress={() => downloadManager.pause(job.id)}>
                 <Pause size={13} color={palette.warning} />
                 <Text style={[styles.chipLabel, { color: palette.warning }]}>Pause</Text>
@@ -376,6 +386,8 @@ export function DownloadsScreen() {
               uri={group.posterUrl}
               style={[styles.poster, { width: posterW, height: posterH, borderRadius: radius.sm }]}
               initials={initialsFor(group.title)}
+              play
+              playColor="#FFFFFF"
             />
             <View style={styles.folderBadge}>
               <Text style={styles.folderBadgeText}>{group.jobs.length}</Text>
@@ -568,6 +580,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   poster: { width: 64, height: 96, borderRadius: radius.sm },
+  posterPressable: { position: "relative" },
   jobTitle: { color: "#FFFFFF", fontWeight: "700" },
   jobMeta: { color: palette.textMuted, fontSize: 12 },
   speedLabel: { color: palette.textSecondary, fontSize: 11, fontVariant: ["tabular-nums"] },

@@ -31,7 +31,13 @@ export const PosterCard = memo(function PosterCard({ item, width, onPress }: Pos
       hasSheen={false}
     >
       <View style={{ height, borderRadius: radius.card, overflow: "hidden", backgroundColor: palette.surface, position: "relative" }}>
-        <Poster uri={item.posterUrl} style={StyleSheet.absoluteFill} initials={initialsFor(item.name)} />
+        <Poster
+          uri={item.posterUrl}
+          style={StyleSheet.absoluteFill}
+          initials={initialsFor(item.name)}
+          play
+          playColor="#FFFFFF"
+        />
 
         {/* Ambient bottom gradient inside poster */}
         <LinearGradient
