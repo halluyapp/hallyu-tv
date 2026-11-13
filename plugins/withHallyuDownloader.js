@@ -148,19 +148,6 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
     }
 
     @ReactMethod
-    fun pause(key: String, promise: Promise) {
-        try {
-            val id = prefs.getLong(key, -1L)
-            if (id >= 0 && android.os.Build.VERSION.SDK_INT >= 24) {
-                downloadManager().pauseDownload(id)
-            }
-            promise.resolve(null)
-        } catch (e: Exception) {
-            promise.reject("E_PAUSE", e.message ?: "pause failed", e)
-        }
-    }
-
-    @ReactMethod
     fun verifyAndInstallApk(filePath: String, expectedPackage: String, expectedVersionCode: Double, expectedSha256: String, promise: Promise) {
         try {
             val file = File(filePath)
@@ -291,10 +278,26 @@ function patchMainApplication(androidProjectRoot, packageName = PACKAGE) {
 }
 
 function patchReleaseSigning(androidProjectRoot) {
-  // Intentionally no-op: do not modify app/build.gradle signing config.
-  // Expo's generated signingConfigs (with debug config) is kept intact so
-  // PRs and regular pushes build successfully without keystore secrets.
-  // Release CI can inject release signing separately if needed.
+  const gradlePath = path.join(androidProjectRoot, "app/build.gradle");
+  if (!fs.existsSync(gradlePath)) return;
+  let src = fs.readFileSync(gradlePath, "utf8");
+  if (src.includes("HALLYU_RELEASE_SIGNING")) return;
+  const signingAnchor = "    signingConfigs {";
+  const releaseSigning = `    signingConfigs {
+        // HALLYU_RELEASE_SIGNING: local builds use Expo's debug key; release CI supplies protected secrets.
+        release {
+            if (System.getenv("ANDROID_KEYSTORE_PATH") && System.getenv("ANDROID_KEYSTORE_PASSWORD") && System.getenv("ANDROID_KEY_ALIAS") && System.getenv("ANDROID_KEY_PASSWORD")) {
+                storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+`;
+  if (!src.includes(signingAnchor)) throw new Error("withHallyuDownloader: could not locate Android signingConfigs");
+  src = src.replace(signingAnchor, releaseSigning);
+  src = src.replace(/release\s*\{([\s\S]*?)signingConfig signingConfigs\.debug([\s\S]*?)\}/, (block) => block.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.release"));
+  fs.writeFileSync(gradlePath, src, "utf8");
 }
 
 const withHallyuDownloader = (config) =>
