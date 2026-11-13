@@ -151,7 +151,9 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
     fun pause(key: String, promise: Promise) {
         try {
             val id = prefs.getLong(key, -1L)
-            if (id >= 0) downloadManager().pauseDownload(id)
+            if (id >= 0 && android.os.Build.VERSION.SDK_INT >= 24) {
+                downloadManager().pauseDownload(id)
+            }
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("E_PAUSE", e.message ?: "pause failed", e)
