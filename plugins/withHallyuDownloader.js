@@ -291,28 +291,10 @@ function patchMainApplication(androidProjectRoot, packageName = PACKAGE) {
 }
 
 function patchReleaseSigning(androidProjectRoot) {
-  const gradlePath = path.join(androidProjectRoot, "app/build.gradle");
-  if (!fs.existsSync(gradlePath)) return;
-  let src = fs.readFileSync(gradlePath, "utf8");
-  if (src.includes("HALLYU_RELEASE_SIGNING")) return;
-  const signingAnchor = "    signingConfigs {";
-  const releaseSigning = `    signingConfigs {
-        // HALLYU_RELEASE_SIGNING: local builds use Expo's debug key; release CI supplies protected secrets.
-        release {
-            if (System.getenv("ANDROID_KEYSTORE_PATH") && System.getenv("ANDROID_KEYSTORE_PASSWORD") && System.getenv("ANDROID_KEY_ALIAS") && System.getenv("ANDROID_KEY_PASSWORD")) {
-                storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
-            }
-        }
-`;
-  if (!src.includes(signingAnchor)) throw new Error("withHallyuDownloader: could not locate Android signingConfigs");
-  src = src.replace(signingAnchor, releaseSigning);
-  // Keep release builds using signingConfigs.debug unless CI explicitly
-  // overrides via release secrets. This keeps PRs and regular pushes
-  // buildable without keystore secrets.
-  fs.writeFileSync(gradlePath, src, "utf8");
+  // Intentionally no-op: do not modify app/build.gradle signing config.
+  // Expo's generated signingConfigs (with debug config) is kept intact so
+  // PRs and regular pushes build successfully without keystore secrets.
+  // Release CI can inject release signing separately if needed.
 }
 
 const withHallyuDownloader = (config) =>
