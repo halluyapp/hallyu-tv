@@ -1,88 +1,33 @@
 # Hallyu TV
 
-A standalone React Native / Expo streaming client for phones, tablets, and
-Android TV. It talks directly to the public Zarhosting catalogue/stream API.
-There is no app backend, no account system, no phone-to-TV pairing, and no media
-proxy. Mobile and TV each keep their own local watchlist, resume positions, and
-downloads.
+A full-stack streaming web application built with Express, Vite, React, and Tailwind CSS, preserving Hallyu TV's **Obsidian Liquid Glass / Emberlight** aesthetic and live integration with the Zarhosting catalogue and stream API.
 
 ## Features
 
-- Browse, search, and open title details from the Zarhosting catalogue.
-- Play movies and series with the existing `expo-video` player.
-- Select seasons/episodes, quality, and subtitle tracks (SRT/WebVTT).
-- Resume playback from device-local progress.
-- Download full-length progressive MP4 sources for offline viewing.
-  - Android uses the system `DownloadManager` through a small Kotlin module.
-  - Other platforms fall back to `expo-file-system`.
-- Android TV leanback launcher support and a remote-friendly TV interface.
-- Premium “Obsidian Glass / Emberlight” dark UI preserved.
-- Emberlight UI sound design: six bundled interface tones (tap, confirm,
-  play swell, tab tick, soft error, download-complete bell) driven by a
-  `SoundProvider`/`useSound()` API (`src/services/sound/SoundContext.tsx`),
-  mutable from My Space; title audio is never touched.
+- **Home Showcase & Curated Rails**: Featured HeroStage carousel, quick world chips, Continue Watching, Hot Picks, Trending Now, genre collections, and local Watchlist rail.
+- **Explore & Live Search**: Real-time title search with world, genre, and movie/series filters plus paginated browsing.
+- **Title Details**: Cast, seasons & episodes, Watchlist bookmarking, expandable synopsis with Web Speech audio synopsis, and progressive MP4 download queueing.
+- **Web Video Player**: Range-proxied MP4 playback (`/api/proxy/media`), automatic SRT/VTT subtitle loading with timing offset & size controls, quality/speed pickers, Cinema shade, control lock, Picture-in-Picture, keyboard shortcuts, and automatic Next Episode countdown & prefetch.
+- **Offline Downloads**: Browser IndexedDB MP4 caching (`Play offline`, `Save MP4`, pause/resume/retry/delete, batch actions) with a Device Storage meter.
+- **My Space & Emberlight Audio**: Watchlist and viewing history stored locally (`localStorage`), Display Mode switcher (`Automatic`, `Cinema`, `Compact`), cache clearing, and 6-tone Emberlight UI sound engine (`assets/sounds/*.mp3`).
 
-## Provider contract
+## Server & Provider Contract
 
-Stream resolution always uses:
+The Express backend (`server.ts`) serves the React frontend and proxies provider API and CDN requests with required headers (`User-Agent`, `Referer`, `Origin`) and HTTP `Range` pass-through:
 
-```http
-GET https://movieapi.zarhosting.dpdns.org/api/public/v1/stream/{subject_id}
-    ?detail_path={slug}&se={season}&ep={episode}
-User-Agent: Mozilla/5.0
-Referer: https://moviebox.ph/
-Accept: application/json
-```
+- `/api/health` — Server health check
+- `/api/provider/*` — Zarhosting catalogue, search, detail, stream, and caption metadata proxy
+- `/api/proxy/media?url=...` — Range-supporting MP4 streaming and download proxy
+- `/api/proxy/caption?url=...` — Subtitle file proxy
+- `/api/proxy/image?url=...` — Fallback poster/backdrop proxy
 
-Movies use `se=0&ep=0`. Direct CDN media requests use the shared media headers
-(`User-Agent`, `Referer`, `Origin`). See [docs/provider-integration.md](docs/provider-integration.md).
-
-## Requirements
-
-- Bun (or npm) and Node.js
-- For Android native builds: JDK 17 and the Android SDK (via Android Studio or CI)
-
-No environment variables or secrets are required.
-
-## Develop
+## Commands
 
 ```bash
-bun install
-bun run start          # Expo dev server
-bun run android        # Build/run on a connected Android device/emulator
+npm install          # Install dependencies
+npm run dev          # Start Express + Vite dev server on port 3000
+npm run build        # Build production frontend bundle to dist/
+npm start            # Run production Express server
+npm run lint         # TypeScript strict typecheck
+npm test             # Run Node unit tests (tsx --test tests/web/*.test.ts)
 ```
-
-## Verify
-
-```bash
-bun test               # Unit/contract tests
-bun run typecheck      # TypeScript strict check
-bun run verify:provider # Live Zarhosting API contract check
-```
-
-## Build an Android APK
-
-```bash
-bunx expo prebuild -p android --no-install
-cd android
-./gradlew assembleRelease
-```
-
-The APK is written to `android/app/build/outputs/apk/release/app-release.apk`.
-CI (`.github/workflows/apk-build.yml`) runs tests, typecheck, prebuild, and the
-Gradle release build, then uploads the APK artifact.
-
-## Project layout
-
-- `src/services/provider` — Zarhosting client, stream normalization, selection
-- `src/services/downloads` — offline download state machine
-- `src/services/localLibrary.ts` — device-local watchlist/progress
-- `src/screens` — mobile and TV screens
-- `plugins` — Android downloader + Android TV manifest config plugins
-- `docs` — architecture, provider integration, downloads design, cleanup audit
-
-## Notes
-
-- Playback never auto-starts on launch; it requires an explicit Play/episode tap.
-- Downloads only accept progressive MP4 sources, never HLS/DASH manifests.
-- The app does not store or log signed CDN URLs.

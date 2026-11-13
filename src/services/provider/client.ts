@@ -54,8 +54,10 @@ export async function providerFetch(
     signal?.addEventListener("abort", onAbort);
 
     try {
-      const res = await fetch(`${PROVIDER_BASE_URL}${path}`, {
-        headers: { ...PROVIDER_API_HEADERS },
+      const isBrowser = typeof window !== "undefined";
+      const targetUrl = isBrowser ? `/api/provider${path}` : `${PROVIDER_BASE_URL}${path}`;
+      const res = await fetch(targetUrl, {
+        headers: isBrowser ? { Accept: "application/json" } : { ...PROVIDER_API_HEADERS },
         signal: controller.signal,
       });
       if (res.status === 404) throw new ProviderError("not_found", "This title could not be found.");

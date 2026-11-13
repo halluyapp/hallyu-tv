@@ -1,8 +1,6 @@
 import { hydrateCache, writeCache } from "@/services/cache/swr";
 import { fetchHomeCatalogue, searchCatalogue, type SearchPage } from "@/services/provider/adapter";
-import { ProviderError } from "@/types/provider";
 import type { CatalogueItem, HomeSection } from "@/types/provider";
-import { emptyReport, type NormalizeReport } from "./normalize";
 import { harvestCatalogue } from "./harvest";
 import {
   BROWSE_WORLDS,
@@ -99,6 +97,9 @@ const PROVIDER_SHELF_KEYS = new Set([
   // "anime" is a fallback: the derived world wins when it has enough titles,
   // but a thin harvest must not hide the provider's own anime rail.
   "anime",
+  "bollywood",
+  "south-indian",
+  "indian-dramas",
   "asian-dramas",
   "western-tv",
   "cinema",
@@ -151,7 +152,7 @@ function dubSubtitle(items: CatalogueItem[]): string | null {
   const languages = new Set(
     items
       .map((item) => (item.badge ?? "").trim())
-      .filter((badge) => badge.length > 0 && /punjabi|tamil|telugu/i.test(badge)),
+      .filter((badge) => badge.length > 0 && /hindi|punjabi|tamil|telugu/i.test(badge)),
   );
   if (languages.size === 1) return `${Array.from(languages)[0]} dub`;
   return "Dubbed";
@@ -234,7 +235,7 @@ export function buildSnapshot(input: SnapshotInput): CatalogueSnapshot {
     shelf(
       "hollywood",
       "Hollywood",
-      take(uniqueItems(byWorld("hollywood").filter((item) => isOriginalAudio(item)).concat(byWorld("hollywood")))),
+      take(byWorld("hollywood").filter((item) => isOriginalAudio(item)).concat(byWorld("hollywood"))),
       "derived",
     ),
   );
@@ -386,77 +387,128 @@ export async function hydrateCatalogue(): Promise<CatalogueSnapshot | null> {
   return isUsableSnapshot(entry.value) ? entry.value : null;
 }
 
-/**
- * Load the live catalogue and rewrite the cache.
- *
- * If `/home` fails but a cached snapshot exists, the cached catalogue is kept
- * instead of the app showing an empty wall — offline-first by design. If the
- * harvest fails, the provider sections still produce a complete Home.
- */
-let inflight: Promise<CatalogueSnapshot> | null = null;
+import { HARVEST_SEEDS } from "./harvest";
+import { normalizeHomeSections, normalizeItems, emptyReport, type NormalizeReport } from "./normalize";
 
 /**
  * Load the live catalogue, sharing one in-flight load between screens.
- * Home and Explore mount together on a cold start; they must not both fire the
- * home request and the harvest sweep.
  */
-export function loadCatalogue(): Promise<CatalogueSnapshot> {
-  if (inflight) return inflight;
-  inflight = loadCatalogueOnce().finally(() => {
+let inflight: Promise<CatalogueSnapshot> | null = null;
+
+export function loadCatalogue(forceRefresh = false): Promise<CatalogueSnapshot> {
+  if (inflight && !forceRefresh) return inflight;
+  inflight = loadCatalogueOnce(forceRefresh).finally(() => {
     inflight = null;
   });
   return inflight;
 }
 
-async function loadCatalogueOnce(): Promise<CatalogueSnapshot> {
-  let home;
+async function tryLoadFromAggregator(forceRefresh: boolean): Promise<CatalogueSnapshot | null> {
+  if (typeof window === "undefined") return null;
   try {
-    home = await fetchHomeCatalogue();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    const res = await fetch(forceRefresh ? "/api/catalogue?refresh=1" : "/api/catalogue", {
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
+    if (!res.ok) return null;
+
+    const payload = (await res.json()) as {
+      at?: number;
+      home?: unknown;
+      seeds?: { query?: string; page?: number; raw?: unknown }[];
+    };
+
+    const rawHome = payload.home as Record<string, unknown> | undefined;
+    const homeData = (rawHome && typeof rawHome.data === "object" && rawHome.data !== null
+      ? rawHome.data
+      : rawHome) as Record<string, unknown> | undefined;
+    const rawSections = Array.isArray(homeData?.sections) ? homeData.sections : [];
+    const { sections, report, mergedSections } = normalizeHomeSections(rawSections);
+
+    const harvested: CatalogueItem[] = [];
+    let requests = 0;
+    let failures = 0;
+    if (Array.isArray(payload.seeds)) {
+      for (const seedEntry of payload.seeds) {
+        requests += 1;
+        if (!seedEntry.raw) {
+          failures += 1;
+          continue;
+        }
+        const seedSpec = HARVEST_SEEDS.find((s) => s.query === seedEntry.query);
+        const r = seedEntry.raw as Record<string, unknown>;
+        const data = (typeof r.data === "object" && r.data !== null ? r.data : r) as Record<string, unknown>;
+        const rawItems = Array.isArray(data.items) ? data.items : Array.isArray(data.results) ? data.results : [];
+        const { items } = normalizeItems(rawItems);
+        harvested.push(...(seedSpec ? items.filter(seedSpec.keep) : items));
+      }
+    }
+
+    return buildSnapshot({
+      sections,
+      harvest: uniqueItems(harvested),
+      report,
+      rawSections: rawSections.length,
+      mergedSections,
+      harvestRequests: requests,
+      harvestFailures: failures,
+      at: typeof payload.at === "number" ? payload.at : Date.now(),
+    });
   } catch {
-    const cached = await hydrateCatalogue();
-    if (cached) return cached;
-    throw new ProviderError("unavailable", "Could not reach the catalogue. Check your connection.");
+    return null;
+  }
+}
+
+async function loadCatalogueOnce(forceRefresh = false): Promise<CatalogueSnapshot> {
+  const aggregated = await tryLoadFromAggregator(forceRefresh);
+  if (aggregated && (aggregated.sections.length > 0 || aggregated.index.length > 0)) {
+    writeCache(CACHE_KEY, aggregated);
+    return aggregated;
   }
 
-  // Paint immediately from home sections only. Harvest runs in the background
-  // so the cold start isn't blocked by up to 10 extra search requests.
+  const [home, harvest] = await Promise.allSettled([fetchHomeCatalogue(), harvestCatalogue()]);
+
+  if (home.status === "rejected") {
+    const cached = await hydrateCatalogue();
+    if (cached) return cached;
+    throw home.reason;
+  }
+
+  const harvestResult = harvest.status === "fulfilled" ? harvest.value : { items: [], requests: 0, failures: 1 };
   const snapshot = buildSnapshot({
-    sections: home.sections,
-    harvest: [],
-    report: home.report,
-    rawSections: home.rawSections,
-    mergedSections: home.mergedSections,
+    sections: home.value.sections,
+    harvest: harvestResult.items,
+    report: home.value.report,
+    rawSections: home.value.rawSections,
+    mergedSections: home.value.mergedSections,
+    harvestRequests: harvestResult.requests,
+    harvestFailures: harvestResult.failures,
   });
   writeCache(CACHE_KEY, snapshot);
-
-  void harvestCatalogue().then(async (harvestResult) => {
-    const enriched = buildSnapshot({
-      sections: home.sections,
-      harvest: harvestResult.items,
-      report: home.report,
-      rawSections: home.rawSections,
-      mergedSections: home.mergedSections,
-      harvestRequests: harvestResult.requests,
-      harvestFailures: harvestResult.failures,
-    });
-    writeCache(CACHE_KEY, enriched);
-  });
-
   return snapshot;
 }
 
+export type SortMode = "default" | "rating" | "year";
 
-/** Browse a world locally, with optional genre/type filters. */
+export function sortCatalogueItems(items: CatalogueItem[], sort: SortMode): CatalogueItem[] {
+  if (sort === "rating") return sortByRating(items);
+  if (sort === "year") return sortByYear(items);
+  return items;
+}
+
+/** Browse a world locally, with optional genre/type/sort filters. */
 export function browseCatalogue(
   snapshot: CatalogueSnapshot,
-  filters: CatalogueFilters,
+  filters: CatalogueFilters & { sort?: SortMode },
   page = 1,
   pageSize = 30,
 ): { items: CatalogueItem[]; total: number; hasMore: boolean } {
   const world = snapshot.worlds.find((entry) => entry.key === (filters.world ?? "all"));
-  const base = applyFilters(world?.items ?? snapshot.index, { ...filters, world: "all" }, snapshot.membership).filter(
+  const filtered = applyFilters(world?.items ?? snapshot.index, { ...filters, world: "all" }, snapshot.membership).filter(
     (item) => !filters.genre || matchesGenre(item, filters.genre),
   );
+  const base = filters.sort ? sortCatalogueItems(filtered, filters.sort) : filtered;
   const start = (page - 1) * pageSize;
   return {
     items: base.slice(start, start + pageSize),
@@ -465,16 +517,12 @@ export function browseCatalogue(
   };
 }
 
-/** Title search for the catalogue; Hindi/blocked items are filtered out. */
+/** Title search for the catalogue; filters are applied to the returned page. */
 export async function searchTitles(
   query: string,
   page = 1,
   signal?: AbortSignal,
   perPage = 30,
 ): Promise<SearchPage> {
-  const result = await searchCatalogue(query, page, signal, perPage);
-  return {
-    ...result,
-    items: result.items.filter((item) => !isBlockedItem(item)),
-  };
+  return searchCatalogue(query, page, signal, perPage);
 }

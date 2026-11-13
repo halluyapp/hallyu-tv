@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { webStorage } from "@/services/storage/webStorage";
 
 /**
  * Stale-while-revalidate cache.
@@ -31,7 +31,7 @@ export function readCache<T>(key: string): CacheEntry<T> | null {
 export function writeCache<T>(key: string, value: T, now: number = Date.now()): CacheEntry<T> {
   const entry: CacheEntry<T> = { value, at: now };
   memory.set(key, entry as CacheEntry<unknown>);
-  void AsyncStorage.setItem(key, JSON.stringify(entry)).catch(() => {});
+  void webStorage.setItem(key, JSON.stringify(entry)).catch(() => {});
   return entry;
 }
 
@@ -40,7 +40,7 @@ export async function hydrateCache<T>(key: string): Promise<CacheEntry<T> | null
   const cached = readCache<T>(key);
   if (cached) return cached;
   try {
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await webStorage.getItem(key);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;

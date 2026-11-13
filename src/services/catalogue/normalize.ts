@@ -145,6 +145,14 @@ export function normalizeCatalogueItem(raw: unknown): CatalogueItem | null {
   const language = str(r.language);
   const dubFlag = bool(r.dub) ?? bool(r.dubbed);
 
+  const rawGenres = r.genre ?? r.genres;
+  const rawGenreStr = Array.isArray(rawGenres)
+    ? rawGenres.map((g) => (typeof g === "string" ? g : str(asRecord(g)?.name) ?? "")).join(",")
+    : str(rawGenres) ?? "";
+  if (/\b(erotic|hentai|ecchi|adult|xxx|porn|nsfw|18\+|uncensored|bride of the goblin|goblin no suana)\b/i.test(`${name} ${rawGenreStr}`)) {
+    return null;
+  }
+
   return {
     name,
     displayName: cleanTitle(name),

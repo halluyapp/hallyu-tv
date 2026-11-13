@@ -28,33 +28,19 @@ export const PROVIDER_WORLDS: ProviderWorld[] = [
   { key: "shorts", title: "Hot Shorts", match: /hot\s*short/i },
   { key: "anime", title: "Anime", match: /anime/i },
   { key: "cinema", title: "Cinema", match: /cinema/i },
-
+  { key: "bollywood", title: "Bollywood", match: /bollywood/i },
   { key: "south-indian", title: "South Indian", match: /south\s*indian/i },
   { key: "hollywood", title: "Hollywood", match: /hollywood/i },
   { key: "top-series", title: "Top Series", match: /top\s*series/i },
   { key: "asian-dramas", title: "Asian Dramas", match: /asian\s*dramas?/i },
-
+  { key: "indian-dramas", title: "Indian Dramas", match: /indian\s*dramas?/i },
   { key: "western-tv", title: "Western TV", match: /western/i },
 ];
 
 /** Genres that must never build a curated shelf or a browse world. */
-const BLOCKED_GENRE_WORDS = new Set(["erotic", "hot", "adult", "hentai", "xxx"]);
+const BLOCKED_GENRE_WORDS = new Set(["erotic", "hot", "adult", "hentai", "ecchi", "xxx", "porn", "nsfw", "18+"]);
 
-/** Hindi is blocked site-wide: no Hindi-dubbed or Hindi-language titles anywhere. */
-const HINDI = "hindi";
-
-/** True when a title is Hindi-language or a Hindi dub release. Blocked everywhere. */
-export function isHindiItem(item: CatalogueItem): boolean {
-  const language = languageOf(item);
-  if (language === HINDI) return true;
-  const badge = (item.badge ?? "").trim().toLowerCase();
-  if (badge === HINDI) return true;
-  const tags = (item.tags ?? []).map((t) => t.trim().toLowerCase());
-  if (tags.includes(HINDI)) return true;
-  if ((item.dubs ?? []).some((d) => d.trim().toLowerCase() === HINDI)) return true;
-  // The provider marks Hindi-dub releases in the slug ("…-hindi-…").
-  return /-hindi(-|$)/i.test(item.slug);
-}
+const BLOCKED_TEXT_RE = /\b(hentai|ecchi|erotic|erotica|porn|xxx|nsfw|uncensored|softcore|gravure|bride of the goblin|goblin no suana)\b/i;
 
 /** Display casing for genres the provider writes in lower case. */
 const GENRE_CASING: Record<string, string> = {
@@ -164,9 +150,11 @@ export function canonicalGenre(raw: string): string | null {
     .join(" ");
 }
 
-/** True when a title is adult-only or Hindi and must stay out of curated shelves. */
+/** True when a title is adult-only and must stay out of curated shelves. */
 export function isBlockedItem(item: CatalogueItem): boolean {
-  if (isHindiItem(item)) return true;
+  if (BLOCKED_TEXT_RE.test(`${item.name} ${item.genre ?? ""} ${item.description ?? ""}`)) {
+    return true;
+  }
   if (!item.genre) return false;
   return item.genre
     .split(",")
@@ -254,7 +242,9 @@ export type WorldKey =
   | "cdrama"
   | "anime"
   | "hollywood"
+  | "bollywood"
   | "south-indian"
+  | "indian-dramas"
   | "asian-dramas"
   | "western-tv"
   | "cinema"
@@ -276,7 +266,9 @@ export const BROWSE_WORLDS: WorldOption[] = [
   { key: "cdrama", label: "C-Drama" },
   { key: "anime", label: "Anime" },
   { key: "hollywood", label: "Hollywood" },
+  { key: "bollywood", label: "Bollywood" },
   { key: "south-indian", label: "South Indian" },
+  { key: "indian-dramas", label: "Indian Drama" },
   { key: "asian-dramas", label: "Asian Drama" },
   { key: "western-tv", label: "Western TV" },
   { key: "cinema", label: "Cinema" },
@@ -284,6 +276,7 @@ export const BROWSE_WORLDS: WorldOption[] = [
   { key: "shorts", label: "Shorts" },
   { key: "movies", label: "Movies" },
   { key: "series", label: "Series" },
+  { key: "dubbed", label: "Hindi Dub" },
 ];
 
 /** Genre worlds are always filtered to what the live catalogue actually has. */
@@ -331,8 +324,12 @@ export function matchesWorld(item: CatalogueItem, world: WorldKey, membership?: 
       return isAnimeItem(item);
     case "hollywood":
       return isHollywoodItem(item);
+    case "bollywood":
+      return isIndianItem(item) && !isSouthIndianItem(item);
     case "south-indian":
       return isSouthIndianItem(item);
+    case "indian-dramas":
+      return isIndianItem(item) && item.mediaType === "series";
     case "asian-dramas":
       return isAsianDramaItem(item) && item.mediaType === "series";
     case "western-tv":

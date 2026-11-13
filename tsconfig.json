@@ -1,6 +1,16 @@
 {
-  "extends": "expo/tsconfig.base",
   "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
@@ -10,6 +20,17 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
+  "include": [
+    "src/web",
+    "src/types",
+    "src/services/catalogue",
+    "src/services/provider/streams.ts",
+    "src/services/subtitles/srt.ts",
+    "src/services/player",
+    "src/config/branding.ts",
+    "src/utils/format.ts",
+    "server.ts",
+    "vite.config.ts"
+  ],
   "exclude": ["node_modules"]
 }

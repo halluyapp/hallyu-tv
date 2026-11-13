@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { webStorage } from "@/services/storage/webStorage";
 import type { LibraryTitle, ProgressRow } from "@/types/library";
 
 /**
@@ -114,7 +114,7 @@ export function latestProgressFor(progress: ProgressRow[], subjectId: string): P
 
 export async function loadLibrary(): Promise<LibrarySnapshot> {
   try {
-    const raw = await AsyncStorage.getItem(LIBRARY_STORAGE_KEY);
+    const raw = await webStorage.getItem(LIBRARY_STORAGE_KEY);
     return raw ? normalizeLibrary(JSON.parse(raw)) : emptyLibrary();
   } catch {
     return emptyLibrary();
@@ -122,5 +122,5 @@ export async function loadLibrary(): Promise<LibrarySnapshot> {
 }
 
 export async function saveLibrary(snapshot: LibrarySnapshot): Promise<void> {
-  await AsyncStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(snapshot));
+  await webStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(snapshot));
 }

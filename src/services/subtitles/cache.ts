@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { webStorage } from "@/services/storage/webStorage";
 import type { CaptionTrack } from "@/types/provider";
 import type { Cue } from "./srt";
 
@@ -31,7 +31,7 @@ function isCue(value: unknown): value is Cue {
 export async function saveCues(key: string, cues: Cue[]): Promise<void> {
   if (cues.length === 0) return;
   try {
-    await AsyncStorage.setItem(key, JSON.stringify(cues));
+    await webStorage.setItem(key, JSON.stringify(cues));
   } catch {
     // A full disk should never break playback.
   }
@@ -39,7 +39,7 @@ export async function saveCues(key: string, cues: Cue[]): Promise<void> {
 
 export async function loadCues(key: string): Promise<Cue[] | null> {
   try {
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await webStorage.getItem(key);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;

@@ -235,7 +235,12 @@ export async function fetchCaptionText(url: string, signal?: AbortSignal): Promi
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort);
   try {
-    const res = await fetch(url, { headers: { ...PROVIDER_MEDIA_HEADERS }, signal: controller.signal });
+    const isBrowser = typeof window !== "undefined";
+    const targetUrl = isBrowser ? `/api/proxy/caption?url=${encodeURIComponent(url)}` : url;
+    const res = await fetch(targetUrl, {
+      headers: isBrowser ? undefined : { ...PROVIDER_MEDIA_HEADERS },
+      signal: controller.signal,
+    });
     if (!res.ok) throw new ProviderError("unavailable", `Caption server responded with ${res.status}`);
     return await res.text();
   } catch (err) {

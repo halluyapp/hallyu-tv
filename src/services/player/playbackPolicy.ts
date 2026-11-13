@@ -13,7 +13,7 @@ import { selectableSources, type NormalizedSource } from "../provider/streams";
 
 export const STALL_WINDOW_MS = 90_000;
 export const STALLS_BEFORE_DOWNSHIFT = 2;
-export const MIN_QUALITY = 360;
+export const MIN_QUALITY = 480;
 
 export function qualityNumber(label: string | null): number | null {
   if (!label) return null;

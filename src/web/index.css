@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg-canvas: #04060a;
+  --bg-elevated: #090d14;
+  --surface: #0e141e;
+  --surface-raised: #141c2b;
+  --surface-glass: rgba(16, 23, 35, 0.72);
+  --glass-fill: rgba(255, 255, 255, 0.05);
+  --glass-fill-strong: rgba(255, 255, 255, 0.12);
+  --glass-stroke: rgba(255, 255, 255, 0.12);
+  --glass-stroke-bright: rgba(255, 255, 255, 0.24);
+  --accent: #ff5e3a;
+  --accent-bright: #ff8256;
+  --accent-rose: #ff2d55;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    background-color: var(--bg-canvas);
+    color: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  button,
+  a,
+  [role="button"] {
+    cursor: pointer;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible {
+    outline: 2px solid #ff8256;
+    outline-offset: 2px;
+  }
+}
+
+.glass-panel {
+  background: var(--surface-glass);
+  border: 1px solid var(--glass-stroke);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.glass-panel-bright {
+  background: var(--surface-glass);
+  border: 1px solid var(--glass-stroke-bright);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+.ember-gradient {
+  background: linear-gradient(135deg, #ff5e3a 0%, #ff2d55 100%);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
