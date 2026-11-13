@@ -148,17 +148,6 @@ class HallyuDownloaderModule(private val reactContext: ReactApplicationContext) 
     }
 
     @ReactMethod
-    fun pause(key: String, promise: Promise) {
-        try {
-            val id = prefs.getLong(key, -1L)
-            if (id >= 0) downloadManager().pauseDownload(id)
-            promise.resolve(null)
-        } catch (e: Exception) {
-            promise.reject("E_PAUSE", e.message ?: "pause failed", e)
-        }
-    }
-
-    @ReactMethod
     fun verifyAndInstallApk(filePath: String, expectedPackage: String, expectedVersionCode: Double, expectedSha256: String, promise: Promise) {
         try {
             val file = File(filePath)
