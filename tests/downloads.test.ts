@@ -104,6 +104,6 @@ describe("native downloader module (Kotlin injected at prebuild)", () => {
   });
 
   test("native module never persists or logs the signed URL", () => {
-    expect(PLUGIN).not.toMatch(/https:\/\/(?!moviebox\.ph)[a-z0-9.]+/i);
+    expect(PLUGIN).not.toMatch(/https:\/\/(?!www\.movieboxpro\.app|moviebox\.ph)[a-z0-9.]+/i);
   });
 });

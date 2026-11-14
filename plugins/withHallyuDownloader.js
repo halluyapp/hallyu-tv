@@ -10,9 +10,9 @@ const path = require("path");
 
 /** Mirror of PROVIDER_MEDIA_HEADERS (src/services/provider/client.ts). */
 const MEDIA_HEADERS = {
-  "User-Agent": "Mozilla/5.0",
-  Referer: "https://moviebox.ph/",
-  Origin: "https://moviebox.ph",
+  "User-Agent": "ExoPlayerLib/2.19.1",
+  Referer: "https://www.movieboxpro.app/",
+  Origin: "https://www.movieboxpro.app",
 };
 
 const PACKAGE = "app.hallyutv.dev";

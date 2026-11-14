@@ -19,9 +19,9 @@ export const PROVIDER_API_HEADERS: Record<string, string> = {
  * JSON API contract; the native downloader mirrors these exactly.
  */
 export const PROVIDER_MEDIA_HEADERS: Record<string, string> = {
-  "User-Agent": "Mozilla/5.0",
-  Referer: "https://moviebox.ph/",
-  Origin: "https://moviebox.ph",
+  "User-Agent": "ExoPlayerLib/2.19.1",
+  Referer: "https://www.movieboxpro.app/",
+  Origin: "https://www.movieboxpro.app",
 };
 
 const API_TIMEOUT_MS = 15_000;
