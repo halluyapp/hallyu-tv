@@ -9,7 +9,8 @@
     "start": "NODE_ENV=production node server.ts",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/web/*.test.ts"
+    "test": "tsx --test tests/web/*.test.ts",
+    "verify:provider": "bun scripts/verify-provider.mjs"
   },
   "dependencies": {
     "@types/compression": "^1.8.1",
