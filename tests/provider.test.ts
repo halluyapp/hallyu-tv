@@ -21,10 +21,10 @@ describe("provider HTTP contract", () => {
     });
   });
 
-  test("media headers are shared by player/downloader and use moviebox.ph", () => {
-    expect(PROVIDER_MEDIA_HEADERS["User-Agent"]).toBe("Mozilla/5.0");
-    expect(PROVIDER_MEDIA_HEADERS.Referer).toBe("https://moviebox.ph/");
-    expect(PROVIDER_MEDIA_HEADERS.Origin).toBe("https://moviebox.ph");
+  test("media headers use the CDN media-verifier profile", () => {
+    expect(PROVIDER_MEDIA_HEADERS["User-Agent"]).toBe("ExoPlayerLib/2.19.1");
+    expect(PROVIDER_MEDIA_HEADERS.Referer).toBe("https://www.movieboxpro.app/");
+    expect(PROVIDER_MEDIA_HEADERS.Origin).toBe("https://www.movieboxpro.app");
   });
 
   test("providerFetch sends the exact headers and base URL", async () => {
