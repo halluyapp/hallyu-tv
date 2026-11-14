@@ -78,6 +78,8 @@ export function PlayerScreen({ launch, onClose, onReplaceLaunch }: PlayerScreenP
   const durationRef = useRef(0);
   const stallTimesRef = useRef<number[]>([]);
   const recoveryRef = useRef({ attempts: 0, triedUrls: new Set<string>(), running: false });
+  const directFallbackRef = useRef(false);
+  const proxyFallbackRef = useRef(false);
   const autoNextCancelledRef = useRef(false);
   const autoSubtitleRef = useRef(false);
   const subtitleOptOutRef = useRef(prefs.defaultSubtitleLang === "off");
@@ -135,9 +137,17 @@ export function PlayerScreen({ launch, onClose, onReplaceLaunch }: PlayerScreenP
   const pipAvailable =
     typeof document !== "undefined" && "pictureInPictureEnabled" in document && document.pictureInPictureEnabled;
 
-  // Resolve playback URL (offline OPFS/IDB Blob or Express Range proxy).
+  // Resolve playback URL (offline OPFS/IDB Blob, direct CDN, or Express Range proxy).
+  //
+  // Direct-first is deliberate: the media CDN answers browsers from the viewer's
+  // own IP (and sends `access-control-allow-origin: *`), while a server-side
+  // proxy running on a datacenter IP is frequently throttled by the CDN's WAF
+  // (HTTP 426/428/429). Playing direct keeps streaming working in production;
+  // the Range proxy remains the fallback for CORS-restricted networks.
   useEffect(() => {
     let cancelled = false;
+    directFallbackRef.current = false;
+    proxyFallbackRef.current = false;
     if (blobUrlRef.current) {
       URL.revokeObjectURL(blobUrlRef.current);
       blobUrlRef.current = null;
@@ -164,7 +174,7 @@ export function PlayerScreen({ launch, onClose, onReplaceLaunch }: PlayerScreenP
     } else if (source.url.startsWith("blob:")) {
       setResolvedSrc(source.url);
     } else {
-      setResolvedSrc(`/api/proxy/media?url=${encodeURIComponent(source.url)}`);
+      setResolvedSrc(source.url);
     }
 
     return () => {
@@ -369,10 +379,36 @@ export function PlayerScreen({ launch, onClose, onReplaceLaunch }: PlayerScreenP
     [source, subjectId, detailPath, season, episode, showError],
   );
 
+  /**
+   * Media error path. Playback starts on the raw CDN URL (best path: the
+   * viewer's own egress is not rate-limited by the CDN WAF). If that fails we
+   * retry through the server Range proxy, and only then re-resolve a fresh
+   * signed source. This keeps playback alive across CORS restrictions,
+   * throttled egress and stale signatures.
+   */
+  const handleMediaError = useCallback(() => {
+    const current = source;
+    if (!current || isOfflineUri(current.url) || current.url.startsWith("blob:")) {
+      const errMsg = videoRef.current?.error?.message || "Media playback error";
+      void recover(classifyPlayerError(errMsg), null);
+      return;
+    }
+    if (!proxyFallbackRef.current) {
+      proxyFallbackRef.current = true;
+      directFallbackRef.current = true;
+      setStatus("loading");
+      setBuffering(true);
+      setFailMessage(null);
+      setResolvedSrc(`/api/proxy/media?url=${encodeURIComponent(current.url)}`);
+      return;
+    }
+    const errMsg = videoRef.current?.error?.message || "Media playback error";
+    void recover(classifyPlayerError(errMsg), null);
+  }, [source, recover]);
+
   // Buffering stall countdown.
   useEffect(() => {
     if (!buffering || status === "error") {
-      setStallSeconds(0);
       return;
     }
     setStallSeconds(0);
@@ -815,8 +851,7 @@ export function PlayerScreen({ launch, onClose, onReplaceLaunch }: PlayerScreenP
             }
           }}
           onError={() => {
-            const errMsg = videoRef.current?.error?.message || "Media playback error";
-            void recover(classifyPlayerError(errMsg), null);
+            handleMediaError();
           }}
         />
       ) : null}

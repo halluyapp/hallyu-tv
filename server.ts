@@ -18,10 +18,86 @@ const PROVIDER_API_HEADERS: Record<string, string> = {
 };
 
 const PROVIDER_MEDIA_HEADERS: Record<string, string> = {
-  "User-Agent": "Mozilla/5.0",
-  Referer: "https://moviebox.ph/",
-  Origin: "https://moviebox.ph",
+  "User-Agent": "ExoPlayerLib/2.19.1",
+  Referer: "https://www.movieboxpro.app/",
+  Origin: "https://www.movieboxpro.app",
+  Accept: "*/*",
+  "Accept-Encoding": "identity",
 };
+
+/**
+ * The hakunaymatata media CDN rejects browser-style requests with
+ * 426/428/429. Try the documented ExoPlayer/movieboxpro profile first, then
+ * progressively older profiles, so a CDN header rotation cannot break
+ * playback again.
+ */
+const MEDIA_HEADER_PROFILES: ReadonlyArray<Record<string, string>> = [
+  PROVIDER_MEDIA_HEADERS,
+  {
+    "User-Agent": "MovieBoxPro/16.2.1 (Android 12; Pixel 6)",
+    Referer: "https://www.movieboxpro.app/",
+    Origin: "https://www.movieboxpro.app",
+  },
+  {
+    "User-Agent": "ExoPlayerLib/2.19.1",
+    Referer: "https://moviebox.ph/",
+    Origin: "https://moviebox.ph",
+  },
+  {
+    "User-Agent": "Mozilla/5.0",
+    Referer: "https://moviebox.ph/",
+    Origin: "https://moviebox.ph",
+  },
+  { "User-Agent": "Mozilla/5.0" },
+];
+
+function isMediaHeaderRejection(status: number): boolean {
+  return status === 401 || status === 403 || status === 426 || status === 428 || status === 429;
+}
+
+interface MediaUpstream {
+  res: Response;
+  profile: Record<string, string>;
+  profileIndex: number;
+}
+
+/**
+ * Fetch a CDN media/caption URL, rotating header profiles until one is
+ * accepted. Returns the first non-rejection response (including 404/416, which
+ * are meaningful to the caller), or the last rejection if every profile fails.
+ */
+async function fetchMediaWithProfiles(
+  url: string,
+  extraHeaders: Record<string, string>,
+  signal: AbortSignal,
+): Promise<MediaUpstream | null> {
+  let last: MediaUpstream | null = null;
+  for (let i = 0; i < MEDIA_HEADER_PROFILES.length; i++) {
+    if (signal.aborted) break;
+    const profile = MEDIA_HEADER_PROFILES[i];
+    if (!profile) break;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { ...profile, ...extraHeaders },
+        signal,
+        redirect: "follow",
+      });
+    } catch {
+      if (signal.aborted) break;
+      continue;
+    }
+    last = { res, profile, profileIndex: i };
+    if (!isMediaHeaderRejection(res.status)) return last;
+    // Drain the rejection body so the socket is released before the next try.
+    try {
+      await res.body?.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+  return last;
+}
 
 const HARVEST_SEED_PARAMS: { query: string; pages: number }[] = [
   { query: "korean", pages: 2 },
@@ -316,11 +392,15 @@ async function createApp() {
     req.on("close", () => controller.abort());
 
     try {
-      const upstream = await fetch(url, { headers: PROVIDER_MEDIA_HEADERS, signal: controller.signal });
-      res.status(upstream.status);
-      res.setHeader("Content-Type", upstream.headers.get("content-type") || "text/plain; charset=utf-8");
+      const upstream = await fetchMediaWithProfiles(url, {}, controller.signal);
+      if (!upstream) {
+        if (!res.headersSent) res.status(502).send("Caption fetch failed");
+        return;
+      }
+      res.status(upstream.res.status);
+      res.setHeader("Content-Type", upstream.res.headers.get("content-type") || "text/plain; charset=utf-8");
       res.setHeader("Cache-Control", "public, max-age=3600");
-      const text = await upstream.text();
+      const text = await upstream.res.text();
       res.send(text);
     } catch {
       if (!res.headersSent) res.status(502).send("Caption fetch failed");
@@ -425,21 +505,47 @@ async function createApp() {
       return;
     }
 
-    const headers: Record<string, string> = { ...PROVIDER_MEDIA_HEADERS };
+    const headers: Record<string, string> = {};
     if (typeof req.headers.range === "string") {
       headers.Range = req.headers.range;
+    }
+    if (typeof req.headers["if-range"] === "string") {
+      headers["If-Range"] = req.headers["if-range"];
     }
 
     const controller = new AbortController();
     req.on("close", () => controller.abort());
 
     try {
-      const upstream = await fetch(url, {
-        headers,
-        signal: controller.signal,
-      });
-
-      res.status(upstream.status);
+      let upstream = await fetchMediaWithProfiles(url, headers, controller.signal);
+      // The CDN throttles bursts with 426/428/429. Give it two short retries
+      // before surfacing a failure so a transient throttle does not kill
+      // playback mid-stream.
+      for (let attempt = 0; attempt < 2 && upstream; attempt += 1) {
+        if (!isMediaHeaderRejection(upstream.res.status)) break;
+        if (controller.signal.aborted) break;
+        try {
+          await upstream.res.body?.cancel();
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+        if (controller.signal.aborted) break;
+        upstream = await fetchMediaWithProfiles(url, headers, controller.signal);
+      }
+      if (!upstream) {
+        if (!res.headersSent) res.status(502).json({ error: "Media stream failed" });
+        return;
+      }
+      const { res: media } = upstream;
+      if (isMediaHeaderRejection(media.status)) {
+        // Every header profile was refused: the CDN is throttling this egress.
+        // 503 + Retry-After lets the client back off and try direct playback.
+        res.setHeader("Retry-After", "3");
+        res.setHeader("X-Media-Blocked", "cdn-waf");
+        res.status(503).json({ error: "Media CDN temporarily refused this stream", retryAfter: 3 });
+        return;
+      }
+      res.status(media.status);
+      res.setHeader("X-Media-Profile", String(upstream.profileIndex));
       const forwardHeaders = [
         "content-type",
         "content-length",
@@ -449,10 +555,10 @@ async function createApp() {
         "last-modified",
       ];
       for (const name of forwardHeaders) {
-        const val = upstream.headers.get(name);
+        const val = media.headers.get(name);
         if (val) res.setHeader(name, val);
       }
-      if (!upstream.headers.get("accept-ranges")) {
+      if (!media.headers.get("accept-ranges")) {
         res.setHeader("Accept-Ranges", "bytes");
       }
 
@@ -462,11 +568,11 @@ async function createApp() {
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
       }
 
-      if (!upstream.body) {
+      if (!media.body) {
         res.end();
         return;
       }
-      const nodeStream = Readable.fromWeb(upstream.body as unknown as WebReadableStream);
+      const nodeStream = Readable.fromWeb(media.body as unknown as WebReadableStream);
       nodeStream.on("error", () => {
         if (!res.headersSent) res.status(502).end();
         else res.destroy();

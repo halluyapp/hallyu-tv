@@ -69,15 +69,28 @@ module used by the app, verifier, and tests.
 
 ## Media access
 
-- API JSON requests use the exact required headers above.
-- Direct CDN media/caption transfers use `PROVIDER_MEDIA_HEADERS`:
-  `User-Agent: Mozilla/5.0`, `Referer: https://moviebox.ph/`,
-  `Origin: https://moviebox.ph`.
-- The Android native downloader mirrors those media headers exactly; tests
-  fail if the plugin and client drift.
-- There is no server-side media proxy. If a direct CDN transfer fails, the app
-  re-resolves a fresh URL and tries another selectable source, then surfaces a
-  clear error. `scripts/cdn-probe.mjs` can diagnose direct CDN behavior.
+- API JSON requests use the exact required headers above
+  (`User-Agent: Mozilla/5.0`, `Referer: https://moviebox.ph/`,
+  `Accept: application/json`).
+- Media transfers (MP4 bytes and captions) use a different profile. The media
+  CDN is fronted by a WAF that answers browser-ish requests with
+  `426 Upgrade Required`, `428` or `429`, so media requests send the documented
+  media-verifier identity instead:
+  `User-Agent: ExoPlayerLib/2.19.1`, `Referer: https://www.movieboxpro.app/`,
+  `Origin: https://www.movieboxpro.app`, `Accept: */*`,
+  `Accept-Encoding: identity`.
+- `PROVIDER_MEDIA_HEADER_PROFILES` holds an ordered fallback list of media
+  profiles (ExoPlayer, MovieBoxPro app, moviebox.ph referer, plain browser,
+  bare). `fetchMediaWithProfiles` walks the list and drains rejected bodies, so
+  a single refused profile cannot break playback.
+- The Android native downloader mirrors the primary media headers exactly;
+  tests fail if the plugin and client drift.
+- Playback is **direct-first**: the browser plays the signed CDN URL itself
+  (the CDN returns `access-control-allow-origin: *`), because the viewer's own
+  egress is not throttled the way a datacenter proxy is. `/api/proxy/media`
+  remains a Range-capable fallback for CORS-restricted networks, and returns
+  `503` + `Retry-After` + `X-Media-Blocked: cdn-waf` when every profile is
+  refused. `scripts/cdn-probe.mjs` diagnoses direct CDN behavior.
 
 ## Subtitles
 

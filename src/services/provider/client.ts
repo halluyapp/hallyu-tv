@@ -17,12 +17,45 @@ export const PROVIDER_API_HEADERS: Record<string, string> = {
 /**
  * Headers for direct CDN media/caption-file transfers. Kept separate from the
  * JSON API contract; the native downloader mirrors these exactly.
+ *
+ * The `hakunaymatata` media CDN rejects plain browser requests with
+ * 426/428/429. Its documented "media verifier" profile is the ExoPlayer
+ * identity plus the movieboxpro.app referer. We keep that as the primary
+ * profile and expose ordered fallbacks so a single CDN rotation cannot take
+ * playback down again.
  */
 export const PROVIDER_MEDIA_HEADERS: Record<string, string> = {
-  "User-Agent": "Mozilla/5.0",
-  Referer: "https://moviebox.ph/",
-  Origin: "https://moviebox.ph",
+  "User-Agent": "ExoPlayerLib/2.19.1",
+  Referer: "https://www.movieboxpro.app/",
+  Origin: "https://www.movieboxpro.app",
+  Accept: "*/*",
+  "Accept-Encoding": "identity",
 };
+
+export const PROVIDER_MEDIA_HEADER_PROFILES: ReadonlyArray<Record<string, string>> = [
+  PROVIDER_MEDIA_HEADERS,
+  {
+    "User-Agent": "MovieBoxPro/16.2.1 (Android 12; Pixel 6)",
+    Referer: "https://www.movieboxpro.app/",
+    Origin: "https://www.movieboxpro.app",
+  },
+  {
+    "User-Agent": "ExoPlayerLib/2.19.1",
+    Referer: "https://moviebox.ph/",
+    Origin: "https://moviebox.ph",
+  },
+  {
+    "User-Agent": "Mozilla/5.0",
+    Referer: "https://moviebox.ph/",
+    Origin: "https://moviebox.ph",
+  },
+  { "User-Agent": "Mozilla/5.0" },
+];
+
+/** CDN statuses that mean "this header profile was rejected" rather than "gone". */
+export function isMediaHeaderRejection(status: number): boolean {
+  return status === 401 || status === 403 || status === 426 || status === 428 || status === 429;
+}
 
 const API_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 2;
